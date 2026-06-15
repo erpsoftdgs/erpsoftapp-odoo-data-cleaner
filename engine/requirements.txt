@@ -1,0 +1,9 @@
+# Odoo Data Migration Engine – Python Dependencies
+anthropic>=0.30.0
+pandas>=2.0.0
+openpyxl>=3.1.0
+xlrd>=2.0.1          # for legacy .xls support
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9   # required by FastAPI for file uploads
+python-dotenv>=1.0.0      # loads ANTHROPIC_API_KEY etc. from the project-root .env
