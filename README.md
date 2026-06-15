@@ -45,10 +45,10 @@ pip3 install -r requirements.txt --break-system-packages   # Odoo.sh / externall
 The engine reads its secrets from the **project-root `.env`**:
 
 ```env
-ANTHROPIC_API_KEY=...
-OPENROUTER_API_KEY=...   # optional fallback when Anthropic rate-limits
-GEMINI_API_KEY=...       # optional
-RATE_LIMIT_RPM=3
+ANTHROPIC_API_KEY=
+OPENROUTER_API_KEY=   # optional fallback when Anthropic rate-limits
+GEMINI_API_KEY=       # optional
+RATE_LIMIT_RPM=
 ```
 
 ### 2. Install frontend dependencies
@@ -83,19 +83,19 @@ The frontend reads its config from `frontend/.env.local`:
 
 ```env
 # Points the proxy at the running engine
-ENGINE_URL=http://localhost:8000
+ENGINE_URL=
 
 # Auth / sessions
-ADMIN_EMAILS=services@erpsoftapp.com        # comma-separated allowlist for /admin
-SESSION_SECRET=<random 32+ byte string>     # node -e "console.log(require('crypto').randomBytes(48).toString('base64'))"
+ADMIN_EMAILS=        # comma-separated allowlist for /admin
+SESSION_SECRET=      # generate with: node -e "console.log(require('crypto').randomBytes(48).toString('base64'))"
 
-# SMTP (erpsoftapp.com mailbox) — sends the 6-digit login codes.
+# SMTP — sends the 6-digit login codes.
 # Leave blank locally: codes are printed to the server console instead.
 SMTP_HOST=
-SMTP_PORT=587
+SMTP_PORT=
 SMTP_USER=
 SMTP_PASS=
-SMTP_FROM="erpSOFTapp <services@erpsoftapp.com>"
+SMTP_FROM=
 ```
 
 ## How login works
