@@ -1,0 +1,14 @@
+# Superseded root copy of the engine — engine/odoo_data_engine.py is canonical
+/odoo_data_engine.py
+
+# Python
+__pycache__/
+*.pyc
+
+# Engine local runtime files (uploaded/cleaned files from local testing)
+engine/tmp/
+engine/__pycache__/
+
+# Environment secrets
+.env
+.env.*
