@@ -35,30 +35,51 @@ counts/timing/stored filename) to a local SQLite database.
 
 ## Setup
 
-### 1. Install the engine's Python dependencies
+### 1. Create the root `.env`
+
+Both the engine and the frontend read from a **single `.env` at the project root**:
+
+```env
+# Engine — AI providers
+ANTHROPIC_API_KEY=
+OPENROUTER_API_KEY=   # optional fallback when Anthropic rate-limits
+GEMINI_API_KEY=       # optional
+RATE_LIMIT_RPM=
+
+# Frontend — auth & sessions
+ADMIN_EMAILS=         # comma-separated allowlist for /admin
+SESSION_SECRET=       # generate with: node -e "console.log(require('crypto').randomBytes(48).toString('base64'))"
+
+# Frontend — SMTP (leave blank locally; login codes log to console instead)
+SMTP_HOST=
+SMTP_PORT=
+SMTP_USER=
+SMTP_PASS=
+SMTP_FROM=
+
+# Frontend — engine proxy
+ENGINE_URL=
+```
+
+The engine loads it via `python-dotenv` (`load_dotenv()` in `api_server.py`). The
+frontend loads it via a `dotenv` hook at the top of `next.config.ts` — no separate
+`frontend/.env.local` is needed.
+
+### 2. Install the engine's Python dependencies
 
 ```bash
 cd engine
 pip3 install -r requirements.txt --break-system-packages   # Odoo.sh / externally-managed envs
 ```
 
-The engine reads its secrets from the **project-root `.env`**:
-
-```env
-ANTHROPIC_API_KEY=
-OPENROUTER_API_KEY=   # optional fallback when Anthropic rate-limits
-GEMINI_API_KEY=       # optional
-RATE_LIMIT_RPM=
-```
-
-### 2. Install frontend dependencies
+### 3. Install frontend dependencies
 
 ```bash
 cd frontend
 npm install
 ```
 
-### 3. Run everything
+### 4. Run everything
 
 ```bash
 cd frontend
@@ -78,25 +99,6 @@ with color-coded, prefixed log output — `[frontend]` (blue) and `[engine]`
 
 To run them separately (e.g. for isolated debugging), use `npm run
 dev:frontend` or `npm run dev:engine` from `frontend/`.
-
-The frontend reads its config from `frontend/.env.local`:
-
-```env
-# Points the proxy at the running engine
-ENGINE_URL=
-
-# Auth / sessions
-ADMIN_EMAILS=        # comma-separated allowlist for /admin
-SESSION_SECRET=      # generate with: node -e "console.log(require('crypto').randomBytes(48).toString('base64'))"
-
-# SMTP — sends the 6-digit login codes.
-# Leave blank locally: codes are printed to the server console instead.
-SMTP_HOST=
-SMTP_PORT=
-SMTP_USER=
-SMTP_PASS=
-SMTP_FROM=
-```
 
 ## How login works
 
