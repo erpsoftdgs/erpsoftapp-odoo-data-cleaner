@@ -22,13 +22,16 @@ export async function proxy(request: NextRequest) {
   if (isPublicPath) {
     // Already signed in — no reason to show the login page again.
     if (pathname === "/login" && session) {
-      return NextResponse.redirect(new URL("/", request.url));
+      const home = request.nextUrl.clone();
+      home.pathname = "/";
+      return NextResponse.redirect(home);
     }
     return NextResponse.next();
   }
 
   if (!session) {
-    const loginUrl = new URL("/login", request.url);
+    const loginUrl = request.nextUrl.clone();
+    loginUrl.pathname = "/login";
     loginUrl.searchParams.set("from", pathname);
     const response = NextResponse.redirect(loginUrl);
     if (token) response.cookies.delete(SESSION_COOKIE); // stale/expired — clear it
@@ -36,7 +39,9 @@ export async function proxy(request: NextRequest) {
   }
 
   if (pathname.startsWith("/admin") && !isAdminEmail(session.email)) {
-    return NextResponse.redirect(new URL("/", request.url));
+    const home = request.nextUrl.clone();
+    home.pathname = "/";
+    return NextResponse.redirect(home);
   }
 
   // Sliding 1-hour inactivity window: re-sign the token on every authenticated
