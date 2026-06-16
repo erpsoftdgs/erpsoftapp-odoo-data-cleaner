@@ -51,12 +51,4 @@ if (!conversionColumns.some((c) => c.name === "output_filename")) {
   db.exec("ALTER TABLE conversions ADD COLUMN output_filename TEXT");
 }
 
-// Prune expired stored files (30-day retention) once at boot, then on a
-// recurring schedule — this module is the long-running singleton every route
-// already imports, so it's the natural home for background maintenance.
-import("./retention").then(({ pruneExpiredOutputs }) => {
-  pruneExpiredOutputs();
-  setInterval(pruneExpiredOutputs, 6 * 60 * 60 * 1000);
-});
-
 export default db;

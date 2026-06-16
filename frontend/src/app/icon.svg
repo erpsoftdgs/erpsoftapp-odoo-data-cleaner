@@ -1,7 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 220 68">
-  <rect width="220" height="68" rx="10" fill="white"/>
-  <text x="12" y="50" font-family="system-ui, -apple-system, BlinkMacSystemFont, sans-serif" font-weight="800" font-size="44" letter-spacing="-1">
-    <tspan fill="#0a6cb0">erp</tspan><tspan fill="#29a9e0">SOFT</tspan><tspan fill="#0a6cb0">app</tspan>
-  </text>
-  <path d="M 12 59 C 75 50, 150 50, 208 55" fill="none" stroke="#7ab51d" stroke-width="4" stroke-linecap="round"/>
-</svg>
