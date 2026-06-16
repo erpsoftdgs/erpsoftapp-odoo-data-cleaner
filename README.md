@@ -109,8 +109,8 @@ dev:frontend` or `npm run dev:engine` from `frontend/`.
 3. User enters the code; on success the server sets an `httpOnly` JWT session
    cookie (signed with `jose`, 7-day expiry).
 4. `frontend/src/middleware.ts` guards every route: no/invalid session →
-   redirect to `/login`; valid session but not in `ADMIN_EMAILS` → blocked from
-   `/admin`.
+   redirects to `/login`; valid session but not in `ADMIN_EMAILS` → blocked
+   from `/admin`.
 
 ## Conversion reporting & re-download
 

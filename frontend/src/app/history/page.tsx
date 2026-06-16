@@ -1,3 +1,4 @@
+import { redirect } from 'next/navigation';
 import { History, Download } from 'lucide-react';
 import { getSession } from '@/lib/auth';
 import db from '@/lib/db';
@@ -20,8 +21,8 @@ type ConversionRow = {
 };
 
 export default async function HistoryPage() {
-  // Middleware guarantees an authenticated session for this route.
-  const session = (await getSession())!;
+  const session = await getSession();
+  if (!session) redirect('/login');
 
   const rows = db
     .prepare('SELECT * FROM conversions WHERE user_email = ? ORDER BY created_at DESC')

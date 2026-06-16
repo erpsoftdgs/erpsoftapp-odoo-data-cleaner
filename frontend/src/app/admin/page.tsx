@@ -1,6 +1,8 @@
+import { redirect } from 'next/navigation';
 import { ClipboardList, Download } from 'lucide-react';
 import db from '@/lib/db';
 import { formatDate, formatDuration, statusStyles } from '@/lib/conversion-format';
+import { getSession, isAdminEmail } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
@@ -19,7 +21,10 @@ type ConversionRow = {
   output_filename: string | null;
 };
 
-export default function AdminPage() {
+export default async function AdminPage() {
+  const session = await getSession();
+  if (!session || !isAdminEmail(session.email)) redirect('/');
+
   const rows = db
     .prepare('SELECT * FROM conversions ORDER BY created_at DESC')
     .all() as unknown as ConversionRow[];
