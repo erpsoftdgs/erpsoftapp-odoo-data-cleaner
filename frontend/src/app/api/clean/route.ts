@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
+import { Agent } from 'undici';
 import { getSession } from '@/lib/auth';
 import db, { OUTPUT_DIR } from '@/lib/db';
 
@@ -16,6 +17,17 @@ export const maxDuration = 1800;
 // Base URL of the FastAPI engine (engine/api_server.py), e.g.
 //   ENGINE_URL=http://localhost:8000
 const ENGINE_URL = (process.env.ENGINE_URL || 'http://localhost:8000').replace(/\/+$/, '');
+
+// Node's built-in fetch (undici) defaults to a 5-minute headers timeout,
+// which a heavily rate-limited engine run (lots of 429-retry backoff) can
+// blow past even though it's well within the 30-minute maxDuration above —
+// the route would otherwise die with a generic "fetch failed" /
+// UND_ERR_HEADERS_TIMEOUT. Give engine calls their own dispatcher with
+// timeouts that match maxDuration instead of undici's default.
+const ENGINE_DISPATCHER = new Agent({
+  headersTimeout: 1_800_000,
+  bodyTimeout: 1_800_000,
+});
 
 export async function POST(request: Request) {
   // Middleware already blocks unauthenticated requests, but the route must
@@ -49,6 +61,8 @@ export async function POST(request: Request) {
     const cleanResponse = await fetch(`${ENGINE_URL}/api/clean-data`, {
       method: 'POST',
       body: engineForm,
+      // @ts-expect-error -- `dispatcher` is an undici-specific fetch option not in the lib.dom.d.ts types
+      dispatcher: ENGINE_DISPATCHER,
     });
 
     const cleanResult = await cleanResponse.json().catch(() => null);
@@ -67,7 +81,10 @@ export async function POST(request: Request) {
     // Fetch the cleaned file from the engine and buffer it — small enough at
     // this scale, and buffering lets us both return it instantly *and*
     // persist a copy for later re-download (see /history, /admin).
-    const downloadResponse = await fetch(`${ENGINE_URL}${cleanResult.download_url}`);
+    const downloadResponse = await fetch(`${ENGINE_URL}${cleanResult.download_url}`, {
+      // @ts-expect-error -- `dispatcher` is an undici-specific fetch option not in the lib.dom.d.ts types
+      dispatcher: ENGINE_DISPATCHER,
+    });
     if (!downloadResponse.ok || !downloadResponse.body) {
       return NextResponse.json(
         { error: 'Engine produced a result but the cleaned file could not be downloaded.' },
