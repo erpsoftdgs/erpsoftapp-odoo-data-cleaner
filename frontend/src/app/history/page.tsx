@@ -3,6 +3,7 @@ import { History, Download } from 'lucide-react';
 import { getSession } from '@/lib/auth';
 import db from '@/lib/db';
 import { formatDate, formatDuration, statusStyles } from '@/lib/conversion-format';
+import { BASE_PATH } from '@/lib/base-path';
 
 export const dynamic = 'force-dynamic';
 
@@ -87,7 +88,7 @@ export default async function HistoryPage() {
                       <td className="px-4 py-3 whitespace-nowrap">
                         {row.output_filename ? (
                           <a
-                            href={`/api/conversions/${row.id}/download`}
+                            href={`${BASE_PATH}/api/conversions/${row.id}/download`}
                             className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-brand-blue/10 text-brand-blue text-xs font-medium hover:bg-brand-blue/20 transition-colors"
                           >
                             <Download className="w-3.5 h-3.5" />

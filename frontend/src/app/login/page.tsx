@@ -3,6 +3,7 @@
 import { useState, useRef, type FormEvent } from 'react';
 import { useRouter } from 'next/navigation';
 import { Mail, KeyRound, AlertCircle, Loader2, ArrowRight } from 'lucide-react';
+import { BASE_PATH } from '@/lib/base-path';
 
 type Step = 'email' | 'code';
 
@@ -22,7 +23,7 @@ export default function LoginPage() {
     setInfo(null);
     setLoading(true);
     try {
-      const res = await fetch('/api/auth/request-code', {
+      const res = await fetch(`${BASE_PATH}/api/auth/request-code`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim() }),
@@ -45,7 +46,7 @@ export default function LoginPage() {
     setError(null);
     setLoading(true);
     try {
-      const res = await fetch('/api/auth/verify-code', {
+      const res = await fetch(`${BASE_PATH}/api/auth/verify-code`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim(), code: code.trim() }),

@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { LogOut, ShieldCheck, History, Loader2 } from 'lucide-react';
+import { BASE_PATH } from '@/lib/base-path';
 
 export default function TopBar({ email, isAdmin }: { email: string; isAdmin: boolean }) {
   const router = useRouter();
@@ -12,7 +13,7 @@ export default function TopBar({ email, isAdmin }: { email: string; isAdmin: boo
   const signOut = async () => {
     setSigningOut(true);
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await fetch(`${BASE_PATH}/api/auth/logout`, { method: 'POST' });
       router.push('/login');
       router.refresh();
     } finally {

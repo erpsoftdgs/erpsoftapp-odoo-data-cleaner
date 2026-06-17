@@ -13,6 +13,7 @@ import {
   ShieldCheck,
   Sparkles,
 } from 'lucide-react';
+import { BASE_PATH } from '@/lib/base-path';
 
 // Mirrors the engine's SCHEMA_MAP (engine/odoo_data_engine.py) — the engine
 // only knows how to clean these record types, so this must stay in sync.
@@ -68,7 +69,7 @@ export default function HomeClient() {
     formData.append('data_type', detected.key);
 
     try {
-      const response = await fetch('/api/clean', {
+      const response = await fetch(`${BASE_PATH}/api/clean`, {
         method: 'POST',
         body: formData,
       });
