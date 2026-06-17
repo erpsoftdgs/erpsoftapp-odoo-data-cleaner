@@ -40,11 +40,15 @@ counts/timing/stored filename) to a local SQLite database.
 Both the engine and the frontend read from a **single `.env` at the project root**:
 
 ```env
-# Engine — AI providers
+# Engine — AI providers (fallback chain on Anthropic 429s: Claude → Gemini → OpenRouter)
 ANTHROPIC_API_KEY=
-OPENROUTER_API_KEY=   # optional fallback when Anthropic rate-limits
-GEMINI_API_KEY=       # optional
-RATE_LIMIT_RPM=
+GEMINI_API_KEY=         # optional 2nd-tier fallback; defaults to gemini-3.1-flash-lite (set GEMINI_MODEL to override)
+OPENROUTER_API_KEY=     # optional 3rd-tier fallback; defaults to a free Llama model (set OPENROUTER_MODEL to override)
+RATE_LIMIT_RPM=         # Claude requests/minute pace, default 5 (free tier is ~5 RPM)
+GEMINI_RATE_LIMIT_RPM=  # Gemini fallback requests/minute pace, default 15 — set independently since
+                        # Gemini's free-tier limit is higher than Claude's; falling back shouldn't be
+                        # throttled down to Claude's slower pace
+ANTHROPIC_MAX_RETRIES=  # optional, default 3 — SDK retries on a 429 before falling back to Gemini/OpenRouter
 
 # Frontend — auth & sessions
 ADMIN_EMAILS=         # comma-separated allowlist for /admin

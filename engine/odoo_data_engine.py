@@ -447,16 +447,83 @@ OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
 OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
 
+# Gemini sits between Claude and OpenRouter: better quality than OpenRouter's
+# free models, and (on the free Gemini tier) gemini-3.1-flash-lite gives a
+# much higher daily quota (500 RPD) than e.g. gemini-2.5-flash (20 RPD) — see
+# https://ai.dev/rate-limit for current per-model limits on your key.
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL   = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
+GEMINI_URL     = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+
+# How many times the Anthropic SDK retries a 429 internally before giving up
+# and letting _complete_with_fallback() switch to the fallback chain. Claude's
+# output quality is the best of the three, so it's worth a few quick SDK-level
+# retries first rather than dropping down on the very first rate-limit
+# response — but capped, so a sustained rate limit still fails over instead
+# of retrying forever.
+ANTHROPIC_MAX_RETRIES = int(os.getenv("ANTHROPIC_MAX_RETRIES", "3"))
+
+# Per-provider request pacing. RATE_LIMIT_RPM previously existed in .env but
+# was never actually read anywhere — every call fired as fast as the loop
+# could go, relying entirely on Anthropic's SDK retrying its own 429s. Each
+# provider in the fallback chain has a different real limit (Claude's free
+# tier is ~5 RPM; gemini-3.1-flash-lite's free tier is 15 RPM), so pacing them
+# all to one shared rate would throttle a faster fallback down to the
+# slowest provider's pace. Each gets its own independent minimum interval.
+ANTHROPIC_RATE_LIMIT_RPM = float(os.getenv("RATE_LIMIT_RPM") or 5)
+GEMINI_RATE_LIMIT_RPM    = float(os.getenv("GEMINI_RATE_LIMIT_RPM") or 15)
+
+_last_call_at: dict[str, float] = {}
+
+
+def _pace_call(provider: str, rpm: float) -> None:
+    """Block until at least 60/rpm seconds have passed since the last call to this provider."""
+    if rpm <= 0:
+        return
+    min_interval = 60.0 / rpm
+    elapsed = time.monotonic() - _last_call_at.get(provider, 0.0)
+    if elapsed < min_interval:
+        time.sleep(min_interval - elapsed)
+    _last_call_at[provider] = time.monotonic()
+
 
 class _LLMUnavailable(Exception):
     """Raised when neither Anthropic nor the OpenRouter fallback could complete a request."""
 
 
-def _is_rate_limit_error(exc: anthropic.APIError) -> bool:
-    """True for HTTP 429 (rate-limit / quota-exceeded) responses from Anthropic."""
+def _is_rate_limited(exc: anthropic.APIError) -> bool:
+    """True for HTTP 429 (rate-limit / quota-exceeded) responses — transient, worth retrying later."""
     if isinstance(exc, anthropic.RateLimitError):
         return True
     return getattr(exc, "status_code", None) == 429
+
+
+def _is_credits_exhausted(exc: anthropic.APIError) -> bool:
+    """
+    True for "credit balance too low" — comes back as a 400
+    invalid_request_error, not a 429, so status code alone won't catch it.
+    Unlike a rate limit, this won't clear up on its own (needs a human to add
+    billing), so the caller uses this to stop attempting Claude entirely for
+    the rest of the run instead of repeatedly paying the pacing wait only to
+    fail the same way every time.
+    """
+    return "credit balance" in str(exc).lower()
+
+
+def _is_provider_unavailable_error(exc: anthropic.APIError) -> bool:
+    """
+    True for errors that mean Claude itself can't serve this request right
+    now (rate-limited, or out of credits) rather than the request being
+    malformed — these are worth falling back to Gemini/OpenRouter for,
+    since the same prompt would likely succeed elsewhere.
+    """
+    return _is_rate_limited(exc) or _is_credits_exhausted(exc)
+
+
+# Set once a "credit balance too low" response is seen — skips Claude
+# entirely for the rest of this process's life instead of re-attempting (and
+# re-paying the pacing wait for) a call guaranteed to fail the same way again.
+_anthropic_credits_exhausted = False
 
 
 def _retry_after_seconds(exc: anthropic.APIError) -> float | None:
@@ -470,6 +537,43 @@ def _retry_after_seconds(exc: anthropic.APIError) -> float | None:
         except ValueError:
             pass
     return None
+
+
+def _call_gemini(system_prompt: str, user_prompt: str, max_tokens: int) -> str | None:
+    """
+    Run the same prompt against Gemini.
+    Returns the raw response text, or None if Gemini is not configured or the
+    request fails for any reason (including the free tier being exhausted).
+    """
+    if not GEMINI_API_KEY:
+        return None
+
+    payload = json.dumps({
+        "systemInstruction": {"parts": [{"text": system_prompt}]},
+        "contents": [{"parts": [{"text": user_prompt}]}],
+        "generationConfig": {
+            "maxOutputTokens": max_tokens,
+            # Without this, Gemini 2.5+ "thinking" models can spend the whole
+            # max_tokens budget on internal reasoning and return no visible
+            # text at all (finishReason MAX_TOKENS, empty content parts).
+            "thinkingConfig": {"thinkingBudget": 0},
+        },
+    }).encode("utf-8")
+
+    url = GEMINI_URL.format(model=GEMINI_MODEL, key=GEMINI_API_KEY)
+    req = urllib.request.Request(
+        url,
+        data=payload,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=120) as resp:
+            body = json.loads(resp.read().decode("utf-8"))
+        return body["candidates"][0]["content"]["parts"][0]["text"].strip()
+    except (urllib.error.URLError, KeyError, IndexError, json.JSONDecodeError) as exc:
+        logger.warning("Gemini fallback request failed: %s", exc)
+        return None
 
 
 def _call_openrouter(system_prompt: str, user_prompt: str, max_tokens: int) -> str | None:
@@ -517,43 +621,72 @@ def _complete_with_fallback(
     """
     Send one completion request to Claude.
 
-    On a 429 rate-limit response — common on the Anthropic free tier —
-    immediately re-sends the same prompt to the configured free OpenRouter
-    model instead of spinning and burning more Anthropic quota.
+    When Claude itself is unavailable (rate-limited, or the account is out
+    of credits) falls through the chain Claude → Gemini → OpenRouter,
+    stopping at the first one that succeeds, instead of failing the request
+    outright. Once a "credit balance too low" response is seen, Claude is
+    skipped entirely for the rest of this run — that failure won't clear up
+    on its own, so there's no point re-paying the pacing wait to attempt (and
+    re-fail) it on every subsequent call.
 
-    Any other Anthropic error (or an unconfigured/failed fallback) raises
-    _LLMUnavailable so the caller's existing retry loop handles it.
+    Any other Anthropic error (a malformed request, say — one that would
+    fail identically on every provider) or an unconfigured/failed fallback
+    chain raises _LLMUnavailable so the caller's existing retry loop handles it.
     """
-    try:
-        response = client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=max_tokens,
-            system=system_prompt,
-            messages=[{"role": "user", "content": user_prompt}],
-        )
-        return response.content[0].text.strip()
-    except anthropic.APIError as exc:
-        if not _is_rate_limit_error(exc):
-            raise _LLMUnavailable(str(exc)) from exc
+    global _anthropic_credits_exhausted
+    exc: anthropic.APIError | None = None
 
-        logger.warning(
-            "Anthropic rate limit hit – trying OpenRouter fallback (%s) …",
-            OPENROUTER_MODEL,
-        )
-        fallback_text = _call_openrouter(system_prompt, user_prompt, max_tokens)
-        if fallback_text is not None:
-            logger.info("OpenRouter fallback succeeded – continuing pipeline")
-            return fallback_text
+    if not _anthropic_credits_exhausted:
+        _pace_call("anthropic", ANTHROPIC_RATE_LIMIT_RPM)
+        try:
+            response = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=max_tokens,
+                system=system_prompt,
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            return response.content[0].text.strip()
+        except anthropic.APIError as caught:
+            if _is_credits_exhausted(caught):
+                logger.error(
+                    "Anthropic account is out of credits – skipping Claude for "
+                    "the rest of this run, falling back to Gemini/OpenRouter only"
+                )
+                _anthropic_credits_exhausted = True
+            elif not _is_rate_limited(caught):
+                raise _LLMUnavailable(str(caught)) from caught
+            exc = caught
 
+    if exc is not None:
+        logger.warning("Anthropic unavailable (%s) – trying Gemini fallback (%s) …", exc, GEMINI_MODEL)
+    _pace_call("gemini", GEMINI_RATE_LIMIT_RPM)
+    fallback_text = _call_gemini(system_prompt, user_prompt, max_tokens)
+    if fallback_text is not None:
+        logger.info("Gemini fallback succeeded – continuing pipeline")
+        return fallback_text
+
+    logger.warning(
+        "Gemini fallback unavailable – trying OpenRouter fallback (%s) …",
+        OPENROUTER_MODEL,
+    )
+    fallback_text = _call_openrouter(system_prompt, user_prompt, max_tokens)
+    if fallback_text is not None:
+        logger.info("OpenRouter fallback succeeded – continuing pipeline")
+        return fallback_text
+
+    if exc is not None:
         wait = _retry_after_seconds(exc)
         if wait:
             logger.warning(
-                "Rate limited, no OpenRouter fallback – sleeping %.0fs …", wait
+                "Anthropic unavailable, no fallback available – sleeping %.0fs …", wait
             )
             time.sleep(wait)
         raise _LLMUnavailable(
-            "Anthropic rate-limited and no OpenRouter fallback available"
+            "Anthropic unavailable and no fallback (Gemini/OpenRouter) available"
         ) from exc
+    raise _LLMUnavailable(
+        "Anthropic credits exhausted and no fallback (Gemini/OpenRouter) available"
+    )
 
 
 # ===========================================================================
@@ -1945,7 +2078,12 @@ def process_file(
     error_log_path = output_path.parent / f"{output_path.stem}_ERRORS.xlsx"
 
     # --- Anthropic client ---
-    client = anthropic.Anthropic(api_key=api_key)  # api_key=None → reads ANTHROPIC_API_KEY env var
+    # max_retries=ANTHROPIC_MAX_RETRIES (default 3): the SDK retries a 429
+    # internally before raising — giving Claude a few chances to recover from
+    # a transient rate limit before _complete_with_fallback() drops to the
+    # lower-quality free OpenRouter model. Once those retries are exhausted,
+    # the exception reaches our code and the fallback takes over.
+    client = anthropic.Anthropic(api_key=api_key, max_retries=ANTHROPIC_MAX_RETRIES)  # api_key=None → reads ANTHROPIC_API_KEY env var
 
     try:
         # 1. Load raw file, then normalise structure with AI if needed
