@@ -1,0 +1,18 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to dev19 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: dev19.erpsoftapp.com
+          port: 3553
+          username: noah
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          script: bash /opt/erpsoftapp-cleaner/deploy.sh
