@@ -22,7 +22,7 @@ export default function TopBar({ email, isAdmin }: { email: string; isAdmin: boo
   };
 
   return (
-    <header className="bg-white border-b border-slate-200 px-4 sm:px-6 py-2.5 flex items-center justify-between text-sm">
+    <header className="sticky top-0 z-50 bg-white border-b border-slate-200 px-4 sm:px-6 py-2.5 flex items-center justify-between text-sm">
       <div className="flex items-center gap-4">
         <Link href="/" className="font-bold text-slate-700 hover:text-brand-blue">
           <span className="text-brand-blue">erp</span>

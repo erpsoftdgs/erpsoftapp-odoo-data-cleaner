@@ -17,6 +17,13 @@ function getTransporter(): Transporter | null {
     port,
     secure: port === 465,
     auth: { user: SMTP_USER, pass: SMTP_PASS },
+    // Fail fast instead of hanging the request if outbound SMTP is blocked
+    // or slow (some cloud providers restrict egress on mail ports) — without
+    // these, a stalled connection holds the API route open until nginx or
+    // the OS kills it, returning a truncated/empty body to the client.
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 10_000,
   });
   return transporter;
 }
