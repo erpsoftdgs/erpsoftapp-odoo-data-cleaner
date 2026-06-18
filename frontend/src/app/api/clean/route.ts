@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
-import { Agent } from 'undici';
+import { Agent, fetch as undiciFetch, FormData as UndiciFormData } from 'undici';
 import { getSession } from '@/lib/auth';
 import db, { OUTPUT_DIR } from '@/lib/db';
 
@@ -18,12 +18,6 @@ export const maxDuration = 1800;
 //   ENGINE_URL=http://localhost:8000
 const ENGINE_URL = (process.env.ENGINE_URL || 'http://localhost:8000').replace(/\/+$/, '');
 
-// Node's built-in fetch (undici) defaults to a 5-minute headers timeout,
-// which a heavily rate-limited engine run (lots of 429-retry backoff) can
-// blow past even though it's well within the 30-minute maxDuration above —
-// the route would otherwise die with a generic "fetch failed" /
-// UND_ERR_HEADERS_TIMEOUT. Give engine calls their own dispatcher with
-// timeouts that match maxDuration instead of undici's default.
 const ENGINE_DISPATCHER = new Agent({
   headersTimeout: 1_800_000,
   bodyTimeout: 1_800_000,
@@ -52,20 +46,28 @@ export async function POST(request: Request) {
       );
     }
 
-    // Forward the upload to the engine's /api/clean-data endpoint.
-    const engineForm = new FormData();
-    engineForm.append('file', file, file.name);
+    // Forward the upload to the engine's /api/clean-data endpoint. Built with
+    // undici's own FormData (not the global one) so its type matches what
+    // undiciFetch's body expects.
+    const engineForm = new UndiciFormData();
+    engineForm.append('file', new Blob([await file.arrayBuffer()], { type: file.type }), file.name);
     engineForm.append('data_type', dataType);
 
     const startedAt = Date.now();
-    const cleanResponse = await fetch(`${ENGINE_URL}/api/clean-data`, {
+    const cleanResponse = await undiciFetch(`${ENGINE_URL}/api/clean-data`, {
       method: 'POST',
       body: engineForm,
-      // @ts-expect-error -- `dispatcher` is an undici-specific fetch option not in the lib.dom.d.ts types
       dispatcher: ENGINE_DISPATCHER,
     });
 
-    const cleanResult = await cleanResponse.json().catch(() => null);
+    const cleanResult = (await cleanResponse.json().catch(() => null)) as {
+      detail?: string;
+      error?: string;
+      status?: string;
+      message?: string;
+      download_url?: string;
+      stats?: { total?: number; clean?: number; errors?: number };
+    } | null;
 
     if (!cleanResponse.ok || !cleanResult) {
       const message =
@@ -81,8 +83,7 @@ export async function POST(request: Request) {
     // Fetch the cleaned file from the engine and buffer it — small enough at
     // this scale, and buffering lets us both return it instantly *and*
     // persist a copy for later re-download (see /history, /admin).
-    const downloadResponse = await fetch(`${ENGINE_URL}${cleanResult.download_url}`, {
-      // @ts-expect-error -- `dispatcher` is an undici-specific fetch option not in the lib.dom.d.ts types
+    const downloadResponse = await undiciFetch(`${ENGINE_URL}${cleanResult.download_url}`, {
       dispatcher: ENGINE_DISPATCHER,
     });
     if (!downloadResponse.ok || !downloadResponse.body) {
