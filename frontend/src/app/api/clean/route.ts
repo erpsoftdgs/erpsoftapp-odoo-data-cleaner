@@ -132,6 +132,13 @@ export async function POST(request: Request) {
         'Content-Type':
           'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'Content-Disposition': `attachment; filename="cleaned_${file.name}"`,
+        // The response body is the raw file, so any status/row-count info
+        // the browser needs has to ride along as headers instead of JSON —
+        // read by HomeClient.tsx to show a "N rows need review" banner.
+        'X-Conversion-Status': String(cleanResult.status),
+        'X-Rows-Total': String(stats.total ?? 0),
+        'X-Rows-Clean': String(stats.clean ?? 0),
+        'X-Rows-Errors': String(stats.errors ?? 0),
       },
     });
   } catch (error: unknown) {

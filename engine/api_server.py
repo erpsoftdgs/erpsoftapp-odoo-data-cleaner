@@ -77,7 +77,6 @@ async def clean_data(
     job_id = uuid.uuid4().hex[:8]
     input_path  = UPLOAD_DIR / f"{job_id}_input{suffix}"
     output_path = OUTPUT_DIR / f"{job_id}_cleaned.xlsx"
-    error_path  = OUTPUT_DIR / f"{job_id}_errors.xlsx"
 
     try:
         with input_path.open("wb") as fh:
@@ -104,7 +103,6 @@ async def clean_data(
         "message":          result["message"],
         "stats":            result["stats"],
         "download_url":     f"{base_url}/{job_id}_cleaned.xlsx",
-        "error_log_url":    f"{base_url}/{job_id}_errors.xlsx" if result["error_log_path"] else None,
     }
     return JSONResponse(content=response_payload)
 

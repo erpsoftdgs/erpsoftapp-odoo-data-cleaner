@@ -22,6 +22,7 @@ import os
 import pandas as pd
 import urllib.error
 import urllib.request
+from openpyxl.styles import PatternFill
 
 
 # ---------------------------------------------------------------------------
@@ -2006,17 +2007,27 @@ def apply_column_mapping(
 def validate_and_split(
     df: pd.DataFrame,
     data_type: str,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
+) -> tuple[pd.DataFrame, pd.DataFrame, list[int]]:
     """
-    Split DataFrame into:
-      - clean_df: rows that pass mandatory field checks
-      - error_df: rows that fail, with an added 'Error' column explaining why
+    Check every row for the mandatory field, but — unlike the old behavior —
+    do NOT remove failing rows from the main DataFrame. They stay in place
+    (so the output file's row count always matches the input) and are
+    instead flagged for the caller to highlight.
+
+    Returns:
+      - df: the same DataFrame, unchanged (all rows, original order)
+      - error_df: just the failing rows, with '_errors'/'_source_row' columns
+        added, for a separate explanatory sheet
+      - error_positions: 0-based *positional* row numbers (not pandas index
+        labels — upstream steps can leave index gaps, e.g. from dropping
+        blank rows without a reset_index) of the failing rows, so the caller
+        can map them to the correct Excel row number for highlighting.
     """
     mandatory = MANDATORY_FIELD[data_type]
     errors: list[dict] = []
-    clean_indices: list[int] = []
+    error_positions: list[int] = []
 
-    for idx, row in df.iterrows():
+    for pos, (_, row) in enumerate(df.iterrows()):
         row_errors: list[str] = []
 
         # Check mandatory field
@@ -2027,19 +2038,17 @@ def validate_and_split(
         if row_errors:
             err_row = row.to_dict()
             err_row["_errors"] = " | ".join(row_errors)
-            err_row["_source_row"] = idx + 2   # Excel 1-indexed + header row
+            err_row["_source_row"] = pos + 2   # Excel 1-indexed + header row
             errors.append(err_row)
-        else:
-            clean_indices.append(idx)
+            error_positions.append(pos)
 
-    clean_df = df.loc[clean_indices].copy()
     error_df = pd.DataFrame(errors)
 
     logger.info(
         "Validation: %d clean rows, %d error rows",
-        len(clean_df), len(error_df)
+        len(df) - len(error_positions), len(error_df)
     )
-    return clean_df, error_df
+    return df, error_df, error_positions
 
 
 # ===========================================================================
@@ -2061,7 +2070,6 @@ def process_file(
             "status": "success" | "partial" | "error",
             "message": str,
             "output_path": str | None,
-            "error_log_path": str | None,
             "stats": { "total": int, "clean": int, "errors": int }
         }
     """
@@ -2071,11 +2079,10 @@ def process_file(
 
     schema = SCHEMA_MAP[data_type]
 
-    # --- Resolve output paths ---
+    # --- Resolve output path ---
     if output_path is None:
         output_path = input_path.parent / f"{input_path.stem}_ODOO_READY.xlsx"
     output_path = Path(output_path)
-    error_log_path = output_path.parent / f"{output_path.stem}_ERRORS.xlsx"
 
     # --- Anthropic client ---
     # max_retries=ANTHROPIC_MAX_RETRIES (default 3): the SDK retries a 429
@@ -2118,28 +2125,38 @@ def process_file(
         # 6. Apply rule-based cleaning again on renamed columns for consistency
         df_mapped = rule_based_clean(df_mapped, data_type)
 
-        # 8. Validate + split
-        df_final, df_errors = validate_and_split(df_mapped, data_type)
+        # 8. Validate (rows stay in place — failures are flagged, not removed)
+        df_final, df_errors, error_positions = validate_and_split(df_mapped, data_type)
+        clean_count = len(df_final) - len(df_errors)
 
-        # 9. Write outputs
-        df_final.to_excel(output_path, index=False)
-        logger.info("Clean output written to '%s'", output_path)
+        # 9. Write output — one workbook, two sheets: "Data" (everything, with
+        # failing rows highlighted red) and "Errors" (the same failing rows
+        # plus the reason, for reference). Keeps every input row reachable in
+        # the single file the frontend already serves, instead of silently
+        # dropping rows into a second file nothing ever exposes for download.
+        with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+            df_final.to_excel(writer, sheet_name="Data", index=False)
+            if not df_errors.empty:
+                df_errors.to_excel(writer, sheet_name="Errors", index=False)
 
-        error_log_path_result = None
-        if not df_errors.empty:
-            df_errors.to_excel(error_log_path, index=False)
-            logger.warning("%d rows written to error log '%s'", len(df_errors), error_log_path)
-            error_log_path_result = str(error_log_path)
+            if error_positions:
+                fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+                ws = writer.sheets["Data"]
+                for pos in error_positions:
+                    excel_row = pos + 2   # +1 for header, +1 for 1-indexing
+                    for cell in ws[excel_row]:
+                        cell.fill = fill
+
+        logger.info("Output written to '%s'", output_path)
 
         status = "success" if df_errors.empty else "partial"
         return {
             "status": status,
-            "message": f"Processed {total_rows} rows → {len(df_final)} clean, {len(df_errors)} errors.",
+            "message": f"Processed {total_rows} rows → {clean_count} clean, {len(df_errors)} errors.",
             "output_path": str(output_path),
-            "error_log_path": error_log_path_result,
             "stats": {
                 "total": total_rows,
-                "clean": len(df_final),
+                "clean": clean_count,
                 "errors": len(df_errors),
             },
         }
@@ -2150,7 +2167,6 @@ def process_file(
             "status": "error",
             "message": str(exc),
             "output_path": None,
-            "error_log_path": None,
             "stats": {"total": 0, "clean": 0, "errors": 0},
         }
 

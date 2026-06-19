@@ -28,10 +28,18 @@ function detectType(filename: string) {
   return DATA_TYPES.find((t) => name.includes(t.key)) ?? null;
 }
 
+type ConversionResult = {
+  status: string;
+  total: number;
+  clean: number;
+  errors: number;
+};
+
 export default function HomeClient() {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<ConversionResult | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const detected = file ? detectType(file.name) : null;
@@ -40,6 +48,7 @@ export default function HomeClient() {
     if (e.target.files && e.target.files.length > 0) {
       setFile(e.target.files[0]);
       setError(null);
+      setResult(null);
     }
   };
 
@@ -48,6 +57,7 @@ export default function HomeClient() {
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       setFile(e.dataTransfer.files[0]);
       setError(null);
+      setResult(null);
     }
   };
 
@@ -63,6 +73,7 @@ export default function HomeClient() {
 
     setLoading(true);
     setError(null);
+    setResult(null);
 
     const formData = new FormData();
     formData.append('file', file);
@@ -78,6 +89,15 @@ export default function HomeClient() {
         const errorData = await response.json();
         throw new Error(errorData.error || 'Failed to process file');
       }
+
+      // Stats ride along as headers since the response body is the raw
+      // file, not JSON — read them before consuming the body as a blob.
+      setResult({
+        status: response.headers.get('X-Conversion-Status') || 'success',
+        total: Number(response.headers.get('X-Rows-Total')) || 0,
+        clean: Number(response.headers.get('X-Rows-Clean')) || 0,
+        errors: Number(response.headers.get('X-Rows-Errors')) || 0,
+      });
 
       const blob = await response.blob();
       const url = window.URL.createObjectURL(blob);
@@ -254,6 +274,28 @@ export default function HomeClient() {
             <div className="mt-4 p-4 bg-red-50 text-red-700 rounded-lg flex items-start text-sm">
               <AlertCircle className="w-5 h-5 mr-3 flex-shrink-0" />
               <span>{error}</span>
+            </div>
+          )}
+
+          {/* Conversion result — flags rows that need review instead of
+              silently downloading a file that's missing them. */}
+          {result && result.status === 'partial' && (
+            <div className="mt-4 p-4 bg-amber-50 text-amber-800 rounded-lg flex items-start text-sm">
+              <AlertCircle className="w-5 h-5 mr-3 flex-shrink-0" />
+              <span>
+                Downloaded — but <strong>{result.errors}</strong> of {result.total} row
+                {result.total === 1 ? '' : 's'} need review. They&apos;re still in the file,
+                highlighted in red on the <strong>Data</strong> sheet, with the reason listed
+                on the <strong>Errors</strong> sheet.
+              </span>
+            </div>
+          )}
+          {result && result.status === 'success' && (
+            <div className="mt-4 p-4 bg-green-50 text-green-700 rounded-lg flex items-start text-sm">
+              <CheckCircle2 className="w-5 h-5 mr-3 flex-shrink-0" />
+              <span>
+                Downloaded — all <strong>{result.total}</strong> rows cleaned successfully.
+              </span>
             </div>
           )}
 
