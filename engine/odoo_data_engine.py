@@ -2028,26 +2028,206 @@ def apply_column_mapping(
 # 7. VALIDATOR  –  mandatory field checks + error log
 # ===========================================================================
 
+# ===========================================================================
+# 7b. INTERNAL ACCOUNTING ENTRY DETECTOR
+#     Flags rows that are bookkeeping line items, not real customers/vendors —
+#     e.g. "Bad & Damage Lagos", "Suspense Account", "Shortage From Container".
+#     These never get silently dropped — they're routed to the error sheet
+#     for a human to confirm, since a category/keyword filter alone is not
+#     reliable enough to auto-delete a row that might be a real customer.
+# ===========================================================================
+
+# Strong signals: phrases that essentially NEVER describe a real business or
+# person. If any of these appear in the name, we flag with high confidence
+# and skip the AI call entirely — free, instant, zero ambiguity.
+_INTERNAL_ENTRY_PATTERNS = re.compile(
+    r"\b("
+    r"bad\s*&?\s*damage|damaged\s+goods|missing\s+items?|"
+    r"shortage|suspense|suspence|container\s+deposit|"
+    r"gifts?\s*&?\s*donations?|samples?\s+for\s+customers?|"
+    r"write[\s\-]?off|stock\s+adjustment|inventory\s+adjustment|"
+    r"clearing\s+agent|customs?(?:\s+duty)?$"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Weak signal: rows in a category that often (but not always) holds internal
+# entries. On its own this is NOT enough to flag — "Frozera Ltd - Abuja" and
+# "Cornetta - customer" can sit in the same category as "Suspense Account".
+# Used only to decide which AMBIGUOUS rows are worth an AI judgment call.
+_INTERNAL_LEANING_CATEGORIES = {"not sales"}
+
+
+def detect_internal_entries(
+    df: pd.DataFrame,
+    name_col: str,
+    category_col: str | None,
+    client: anthropic.Anthropic | None,
+) -> dict[int, str]:
+    """
+    Identify rows that look like internal accounting/bookkeeping entries
+    rather than real customers or vendors.
+
+    Returns: { row_position: reason_string } for every row flagged.
+    Never removes anything — purely advisory, for the caller to route to
+    the error/review sheet alongside validation failures.
+
+    Two layers, cheapest first:
+
+    Layer 1 — Free regex pattern match (no API cost).
+        Catches the unambiguous cases: "Bad & Damage Lagos", "Suspense",
+        "Shortage From Container" — phrases that never describe a real
+        business no matter the category they were filed under.
+
+    Layer 2 — AI judgment call, but ONLY for rows that are:
+        (a) not already caught by Layer 1, AND
+        (b) sitting in a category that leans internal (e.g. "Not Sales")
+        This keeps the AI call small — typically a handful of rows per
+        file — instead of re-checking every row that already looks fine.
+    """
+    flagged: dict[int, str] = {}
+    if name_col not in df.columns:
+        return flagged
+
+    names = df[name_col].fillna("").astype(str)
+
+    # --- Layer 1: free pattern match ---
+    for pos, name in enumerate(names):
+        if not name.strip():
+            continue
+        m = _INTERNAL_ENTRY_PATTERNS.search(name)
+        if m:
+            flagged[pos] = f"Looks like an internal accounting entry (matched: '{m.group(0)}')"
+
+    # --- Layer 2: AI judgment for ambiguous category-only cases ---
+    if category_col and category_col in df.columns and client is not None:
+        candidates: list[tuple[int, str]] = []
+        categories = df[category_col].fillna("").astype(str).str.strip().str.lower()
+        for pos, name in enumerate(names):
+            if pos in flagged or not name.strip():
+                continue
+            if categories.iloc[pos] in _INTERNAL_LEANING_CATEGORIES:
+                candidates.append((pos, name.strip()))
+
+        if candidates:
+            logger.info(
+                "Internal-entry check: %d ambiguous rows in leaning categories — asking AI",
+                len(candidates),
+            )
+            ai_results = _ai_classify_internal_entries([c[1] for c in candidates], client)
+            for (pos, name), is_internal in zip(candidates, ai_results):
+                if is_internal:
+                    flagged[pos] = "AI flagged as a likely internal/non-customer entry (not a real name)"
+
+    if flagged:
+        logger.info("Internal-entry detection: %d rows flagged for review", len(flagged))
+    return flagged
+
+
+def _ai_classify_internal_entries(
+    names: list[str],
+    client: anthropic.Anthropic,
+    batch_size: int = 30,
+) -> list[bool]:
+    """
+    Ask the AI to judge a batch of ambiguous names: is this a real customer/
+    vendor name, or an internal bookkeeping/accounting line item?
+    Returns a list of booleans (True = internal, not a real entity) aligned
+    by position with the input list.
+    """
+    results: list[bool] = []
+    for i in range(0, len(names), batch_size):
+        batch = names[i : i + batch_size]
+        results.extend(_ai_classify_internal_batch(batch, client))
+        if i + batch_size < len(names):
+            time.sleep(0.3)
+    return results
+
+
+def _ai_classify_internal_batch(batch: list[str], client: anthropic.Anthropic) -> list[bool]:
+    numbered = {str(i): n for i, n in enumerate(batch)}
+
+    system_prompt = (
+        "You are a data quality specialist reviewing an Odoo ERP customer/vendor import. "
+        "Return ONLY valid JSON — no prose, no code fences."
+    )
+    user_prompt = f"""For each name below, decide if it is a REAL customer or vendor
+(a person or a business), or an INTERNAL ACCOUNTING/BOOKKEEPING entry that
+should not be imported as a customer record.
+
+INPUT (JSON object, key = index, value = name):
+{json.dumps(numbered, indent=2)}
+
+Internal/bookkeeping entries include things like: write-offs, stock adjustments,
+suspense accounts, "missing items", "shortage" claims, customs/clearing/regulatory
+labels, donation or sample tracking buckets, or any other line item used for
+internal accounting rather than referring to an actual person or company.
+
+Real customers/vendors include: any actual person's name, any business name
+(even if informal, abbreviated, or paired with a payment method like
+"- Cash Sales" or "- Cash Customer" — that describes HOW they pay, not WHAT they are).
+
+Return a JSON object where each key is the same index and the value is:
+true   -> this is an internal accounting entry, NOT a real customer/vendor
+false  -> this is a real customer or vendor name
+
+Return ONLY the JSON object, e.g. {{"0": false, "1": true}}
+"""
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            raw_text = _complete_with_fallback(client, system_prompt, user_prompt, max_tokens=1000)
+            raw_text = re.sub(r"^```[a-z]*\n?|```$", "", raw_text, flags=re.MULTILINE).strip()
+            parsed: dict[str, bool] = json.loads(raw_text)
+            return [bool(parsed.get(str(i), False)) for i in range(len(batch))]
+        except (json.JSONDecodeError, _LLMUnavailable) as exc:
+            logger.warning("Internal-entry classification attempt %d failed: %s", attempt + 1, exc)
+            time.sleep(2 ** attempt)
+
+    # On total failure, default to False (treat as real) — never silently
+    # discard something we couldn't confidently classify.
+    return [False for _ in batch]
+
+
+
 def validate_and_split(
     df: pd.DataFrame,
     data_type: str,
+    client: anthropic.Anthropic | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[int]]:
     """
-    Check every row for the mandatory field, but — unlike the old behavior —
-    do NOT remove failing rows from the main DataFrame. They stay in place
-    (so the output file's row count always matches the input) and are
-    instead flagged for the caller to highlight.
+    Check every row for the mandatory field AND for signs of being an internal
+    accounting/bookkeeping entry rather than a real customer/vendor — but,
+    unlike the old behavior, do NOT remove failing/flagged rows from the main
+    DataFrame. They stay in place (so the output file's row count always
+    matches the input) and are instead flagged for the caller to highlight.
+
+    Two independent checks per row, either of which can flag it:
+      1. Missing mandatory field (Name / Vendor Name) — existing behavior.
+      2. Looks like an internal accounting entry (e.g. "Bad & Damage Lagos",
+         "Suspense Account") rather than a real person or business — see
+         detect_internal_entries(). Never auto-removed; always routed to the
+         error sheet for a human to confirm, since this judgment call can be
+         wrong (a real customer could share a category with these entries).
 
     Returns:
       - df: the same DataFrame, unchanged (all rows, original order)
-      - error_df: just the failing rows, with '_errors'/'_source_row' columns
-        added, for a separate explanatory sheet
+      - error_df: just the failing/flagged rows, with '_errors'/'_source_row'
+        columns added, for a separate explanatory sheet
       - error_positions: 0-based *positional* row numbers (not pandas index
         labels — upstream steps can leave index gaps, e.g. from dropping
         blank rows without a reset_index) of the failing rows, so the caller
         can map them to the correct Excel row number for highlighting.
     """
     mandatory = MANDATORY_FIELD[data_type]
+    name_col = mandatory   # "Name" for customers, "Vendor Name" for vendors
+    category_col = next((c for c in df.columns if c.lower() == "category"), None)
+
+    # Run internal-entry detection once up front — cheap regex pass always,
+    # AI pass only for the small number of rows in a "leaning" category.
+    internal_flags = detect_internal_entries(df, name_col, category_col, client)
+
     errors: list[dict] = []
     error_positions: list[int] = []
 
@@ -2058,6 +2238,10 @@ def validate_and_split(
         val = row.get(mandatory)
         if pd.isna(val) or (isinstance(val, str) and not val.strip()):
             row_errors.append(f"Missing mandatory field: '{mandatory}'")
+
+        # Check internal-entry flag
+        if pos in internal_flags:
+            row_errors.append(internal_flags[pos])
 
         if row_errors:
             err_row = row.to_dict()
@@ -2150,7 +2334,7 @@ def process_file(
         df_mapped = rule_based_clean(df_mapped, data_type)
 
         # 8. Validate (rows stay in place — failures are flagged, not removed)
-        df_final, df_errors, error_positions = validate_and_split(df_mapped, data_type)
+        df_final, df_errors, error_positions = validate_and_split(df_mapped, data_type, client=client)
         clean_count = len(df_final) - len(df_errors)
 
         # 9. Write output — one workbook, two sheets: "Data" (everything, with
