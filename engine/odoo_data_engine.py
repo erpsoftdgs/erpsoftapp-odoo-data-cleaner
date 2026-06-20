@@ -1859,10 +1859,34 @@ def apply_column_mapping(
             parsed_vals = addr_df[ai_key].values
             if odoo_field not in df.columns:
                 df[odoo_field] = parsed_vals
+            elif odoo_field in needs_split_odoo:
+                # This Odoo field WAS one of the flagged dirty columns (e.g. "Street"
+                # itself held the full messy combined string). It must be force-
+                # overwritten with the AI's clean parsed value on every row that had
+                # data to split — "only fill if blank" would never fire here, since
+                # the dirty column is never blank, it's just wrong. We still leave a
+                # row's Street alone if the AI genuinely returned nothing for it
+                # (parsed_vals[p] is None) so we don't blank out something it
+                # couldn't parse.
+                positions = list(range(len(parsed_vals)))
+                for p in positions:
+                    if parsed_vals[p] not in (None, ""):
+                        df.iloc[p, df.columns.get_loc(odoo_field)] = parsed_vals[p]
             else:
-                # Only overwrite cells that are blank OR came from a flagged column
+                # This Odoo field is a genuinely separate target (e.g. "Street2",
+                # "Zip") that didn't exist as one of the original dirty columns.
+                # Only fill blanks here — never clobber a value the BA or an
+                # earlier step already set correctly.
+                # parsed_vals is a plain positional array (0, 1, 2... matching the
+                # row order we sent to the AI). We must select by POSITION here,
+                # not by index label — df.index[mask] gives label numbers, which
+                # can drift from position if any earlier step dropped/reordered
+                # rows. Using .iloc + a positional boolean mask keeps everything
+                # aligned by position throughout, so the right address always
+                # lands on the right row.
                 mask = df[odoo_field].isna() | (df[odoo_field].astype(str).str.strip() == "")
-                df.loc[mask, odoo_field] = [parsed_vals[i] for i in df.index[mask]]
+                positions = mask.to_numpy().nonzero()[0]   # positional indices where mask is True
+                df.iloc[positions, df.columns.get_loc(odoo_field)] = [parsed_vals[p] for p in positions]
 
         # Clear the original flagged columns — their content has been redistributed
         for col in needs_split_odoo:
