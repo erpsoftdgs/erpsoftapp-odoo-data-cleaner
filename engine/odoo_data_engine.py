@@ -2031,31 +2031,43 @@ def apply_column_mapping(
 # ===========================================================================
 # 7b. INTERNAL ACCOUNTING ENTRY DETECTOR
 #     Flags rows that are bookkeeping line items, not real customers/vendors —
-#     e.g. "Bad & Damage Lagos", "Suspense Account", "Shortage From Container".
+#     e.g. "Bad & Damage Lagos", "Suspense Account", "Stock Writeoff Q3".
 #     These never get silently dropped — they're routed to the error sheet
-#     for a human to confirm, since a category/keyword filter alone is not
-#     reliable enough to auto-delete a row that might be a real customer.
+#     for a human to confirm, since this judgment call is never 100% safe
+#     to act on automatically.
+#
+#     IMPORTANT — this engine processes files from ANY client, not just one
+#     company's spreadsheet. A hardcoded list of English phrases or a
+#     specific category name (e.g. "Not Sales") would only work for the one
+#     file it was written against. So this detector is deliberately built
+#     in two tiers:
+#       - A tiny universal regex catches only truly generic accounting
+#         vocabulary that shows up across virtually any company's books
+#         (suspense, write-off, shortage, damaged goods, etc.) — these are
+#         accounting-textbook terms, not this-client's-specific wording.
+#       - Everything else is judged by the AI directly from the row's own
+#         data (name + whatever category/type column exists, whatever it's
+#         called) — no assumption about column names, category values, or
+#         language. This is what makes it work on a file the engine has
+#         never seen before.
 # ===========================================================================
 
-# Strong signals: phrases that essentially NEVER describe a real business or
-# person. If any of these appear in the name, we flag with high confidence
-# and skip the AI call entirely — free, instant, zero ambiguity.
+# Universal accounting vocabulary — generic bookkeeping terms that show up
+# across virtually any company's books, in English, regardless of industry.
+# Deliberately kept SMALL: only terms with no plausible reading as a real
+# business/person name. When in doubt, leave it out and let the AI judge —
+# a false match here skips straight past human review, so this list must
+# stay conservative.
 _INTERNAL_ENTRY_PATTERNS = re.compile(
     r"\b("
     r"bad\s*&?\s*damage|damaged\s+goods|missing\s+items?|"
-    r"shortage|suspense|suspence|container\s+deposit|"
-    r"gifts?\s*&?\s*donations?|samples?\s+for\s+customers?|"
+    r"shortage|suspense|suspence|"
     r"write[\s\-]?off|stock\s+adjustment|inventory\s+adjustment|"
-    r"clearing\s+agent|customs?(?:\s+duty)?$"
+    r"reconciliation\s+a/?c|stale\s+cheques?|"
+    r"container\s+deposit"
     r")\b",
     re.IGNORECASE,
 )
-
-# Weak signal: rows in a category that often (but not always) holds internal
-# entries. On its own this is NOT enough to flag — "Frozera Ltd - Abuja" and
-# "Cornetta - customer" can sit in the same category as "Suspense Account".
-# Used only to decide which AMBIGUOUS rows are worth an AI judgment call.
-_INTERNAL_LEANING_CATEGORIES = {"not sales"}
 
 
 def detect_internal_entries(
@@ -2066,24 +2078,41 @@ def detect_internal_entries(
 ) -> dict[int, str]:
     """
     Identify rows that look like internal accounting/bookkeeping entries
-    rather than real customers or vendors.
+    rather than real customers or vendors. Works on ANY file — no
+    assumptions about column names, category vocabulary, or language —
+    while costing exactly ONE small AI call per file, regardless of row
+    count. A "judge every row directly" approach was considered but
+    rejected: cost and call count both grow linearly with file size (a
+    50,000-row file would need ~100 chunked calls), which makes per-file
+    cost unpredictable — exactly what this layer needs to avoid.
+
+    Two layers:
+
+    Layer 1 — Free universal regex (no API cost, every file).
+        Catches generic accounting-textbook terms ("suspense", "write-off",
+        "shortage", "damaged goods") that essentially never describe a real
+        business in ANY industry. Deliberately small and conservative.
+
+    Layer 2 — File-specific keyword discovery (ONE small AI call, ~400
+        tokens, regardless of file size). A small, targeted sample is
+        shown to the AI — biased toward rows that look like short/generic
+        labels, since that's where internal entries hide — and it's asked
+        to name a handful of THIS FILE's specific internal-entry
+        vocabulary (if any exists at all). Those keywords compile into a
+        second regex that then runs free across every remaining row. This
+        is what makes the engine generalise per-client without ever
+        calling the AI per row or per chunk: a Lagos restaurant chain's
+        "Cash Sales" buckets and a UK wholesaler's "Stale Cheques" entries
+        both get caught by the SAME mechanism, just with different
+        discovered keywords — at the same flat cost whether the file has
+        200 rows or 200,000.
+
+        If the sample looks completely clean, nothing further is flagged —
+        most files won't have any internal entries at all.
 
     Returns: { row_position: reason_string } for every row flagged.
     Never removes anything — purely advisory, for the caller to route to
     the error/review sheet alongside validation failures.
-
-    Two layers, cheapest first:
-
-    Layer 1 — Free regex pattern match (no API cost).
-        Catches the unambiguous cases: "Bad & Damage Lagos", "Suspense",
-        "Shortage From Container" — phrases that never describe a real
-        business no matter the category they were filed under.
-
-    Layer 2 — AI judgment call, but ONLY for rows that are:
-        (a) not already caught by Layer 1, AND
-        (b) sitting in a category that leans internal (e.g. "Not Sales")
-        This keeps the AI call small — typically a handful of rows per
-        file — instead of re-checking every row that already looks fine.
     """
     flagged: dict[int, str] = {}
     if name_col not in df.columns:
@@ -2091,7 +2120,7 @@ def detect_internal_entries(
 
     names = df[name_col].fillna("").astype(str)
 
-    # --- Layer 1: free pattern match ---
+    # --- Layer 1: free universal pattern match ---
     for pos, name in enumerate(names):
         if not name.strip():
             continue
@@ -2099,95 +2128,311 @@ def detect_internal_entries(
         if m:
             flagged[pos] = f"Looks like an internal accounting entry (matched: '{m.group(0)}')"
 
-    # --- Layer 2: AI judgment for ambiguous category-only cases ---
-    if category_col and category_col in df.columns and client is not None:
-        candidates: list[tuple[int, str]] = []
-        categories = df[category_col].fillna("").astype(str).str.strip().str.lower()
-        for pos, name in enumerate(names):
-            if pos in flagged or not name.strip():
-                continue
-            if categories.iloc[pos] in _INTERNAL_LEANING_CATEGORIES:
-                candidates.append((pos, name.strip()))
+    # --- Layer 2: discover this file's specific internal-entry vocabulary
+    #     with ONE small call, then apply it as a free regex across all rows ---
+    if client is not None:
+        remaining_positions = [p for p in range(len(names)) if p not in flagged and names.iloc[p].strip()]
+        if remaining_positions:
+            sample = _sample_for_keyword_discovery(names, remaining_positions)
+            discovered_terms = _ai_discover_internal_keywords(sample, client)
 
-        if candidates:
-            logger.info(
-                "Internal-entry check: %d ambiguous rows in leaning categories — asking AI",
-                len(candidates),
-            )
-            ai_results = _ai_classify_internal_entries([c[1] for c in candidates], client)
-            for (pos, name), is_internal in zip(candidates, ai_results):
-                if is_internal:
-                    flagged[pos] = "AI flagged as a likely internal/non-customer entry (not a real name)"
+            if discovered_terms:
+                logger.info("Internal-entry keyword discovery found: %s", discovered_terms)
+                discovered_regex = re.compile(
+                    r"\b(" + "|".join(re.escape(t) for t in discovered_terms) + r")\b",
+                    re.IGNORECASE,
+                )
+                for pos in remaining_positions:
+                    name = names.iloc[pos].strip()
+                    m = discovered_regex.search(name)
+                    if m:
+                        flagged[pos] = (
+                            f"Looks like an internal accounting entry specific to this file "
+                            f"(matched: '{m.group(0)}')"
+                        )
+            else:
+                logger.info("Internal-entry keyword discovery found nothing — file looks clean")
 
     if flagged:
         logger.info("Internal-entry detection: %d rows flagged for review", len(flagged))
     return flagged
 
 
-def _ai_classify_internal_entries(
-    names: list[str],
+def _sample_for_keyword_discovery(
+    names: pd.Series,
+    candidate_positions: list[int],
+    max_sample: int = 60,
+) -> list[str]:
+    """
+    Build a small, smart sample to show the AI for keyword discovery —
+    biased toward rows that look like short generic labels (where internal
+    entries hide) rather than a plain "first N rows" sample, which could
+    easily miss every internal-entry example in a 1000+ row file.
+
+    Strategy: take every row that is short (<=4 words) and digit-free —
+    the same shape internal entries tend to have — up to max_sample. If
+    that's not enough rows to reach a reasonable sample size, top up with
+    a few longer ones too, so the AI also sees normal-shaped real names
+    for contrast (helps it avoid over-flagging short real business names
+    like "Amir Bakery").
+    """
+    short_shaped = []
+    other = []
+    for pos in candidate_positions:
+        name = names.iloc[pos].strip()
+        words = name.split()
+        if len(words) <= 4 and not any(ch.isdigit() for ch in name):
+            short_shaped.append(name)
+        else:
+            other.append(name)
+
+    sample = short_shaped[:max_sample]
+    if len(sample) < max_sample:
+        sample.extend(other[: max_sample - len(sample)])
+    return sample
+
+
+def _ai_discover_internal_keywords(
+    sample_names: list[str],
     client: anthropic.Anthropic,
-    batch_size: int = 30,
-) -> list[bool]:
+) -> list[str]:
     """
-    Ask the AI to judge a batch of ambiguous names: is this a real customer/
-    vendor name, or an internal bookkeeping/accounting line item?
-    Returns a list of booleans (True = internal, not a real entity) aligned
-    by position with the input list.
+    ONE AI call: look at a sample of names from this specific file and
+    identify whether any of them are internal accounting/bookkeeping
+    entries rather than real customers/vendors. If so, extract the
+    distinguishing keyword/phrase from each — these get compiled into a
+    free regex that then runs across the whole file with no further API
+    cost. If the sample contains no such entries, returns an empty list
+    and the file is treated as clean (no Layer 3 fallback needed).
     """
-    results: list[bool] = []
-    for i in range(0, len(names), batch_size):
-        batch = names[i : i + batch_size]
-        results.extend(_ai_classify_internal_batch(batch, client))
-        if i + batch_size < len(names):
-            time.sleep(0.3)
-    return results
-
-
-def _ai_classify_internal_batch(batch: list[str], client: anthropic.Anthropic) -> list[bool]:
-    numbered = {str(i): n for i, n in enumerate(batch)}
-
     system_prompt = (
-        "You are a data quality specialist reviewing an Odoo ERP customer/vendor import. "
-        "Return ONLY valid JSON — no prose, no code fences."
+        "You are a data quality specialist reviewing an Odoo ERP customer/vendor import "
+        "from an arbitrary client spreadsheet. Column names, language, and conventions vary "
+        "by client. Return ONLY valid JSON — no prose, no code fences."
     )
-    user_prompt = f"""For each name below, decide if it is a REAL customer or vendor
-(a person or a business), or an INTERNAL ACCOUNTING/BOOKKEEPING entry that
-should not be imported as a customer record.
+    user_prompt = f"""Here is a sample of {len(sample_names)} names from a customer/vendor list:
 
-INPUT (JSON object, key = index, value = name):
-{json.dumps(numbered, indent=2)}
+{json.dumps(sample_names, indent=2)}
 
-Internal/bookkeeping entries include things like: write-offs, stock adjustments,
-suspense accounts, "missing items", "shortage" claims, customs/clearing/regulatory
-labels, donation or sample tracking buckets, or any other line item used for
-internal accounting rather than referring to an actual person or company.
+Most of these are real customer or vendor names (people or businesses) and should be
+left alone. A SMALL NUMBER may instead be internal accounting/bookkeeping entries that
+were mixed into this list by mistake — e.g. write-offs, suspense accounts, shortage or
+damage claims, reconciliation buckets, regulatory/customs labels, or similar internal
+line items that do not refer to an actual person or company.
 
-Real customers/vendors include: any actual person's name, any business name
-(even if informal, abbreviated, or paired with a payment method like
-"- Cash Sales" or "- Cash Customer" — that describes HOW they pay, not WHAT they are).
+Look for any such internal entries in this sample. For each one you find, extract the
+SHORT distinguishing keyword or phrase that identifies it as internal (not the whole
+name — just the part that signals "this is bookkeeping, not a customer").
 
-Return a JSON object where each key is the same index and the value is:
-true   -> this is an internal accounting entry, NOT a real customer/vendor
-false  -> this is a real customer or vendor name
+Do NOT flag real business names just because they are short or generic-sounding —
+e.g. "Amir Bakery", "Cornetta", "Big Basket" are real businesses, not internal entries.
+Only flag things that are clearly accounting/operational in nature.
 
-Return ONLY the JSON object, e.g. {{"0": false, "1": true}}
+Return a JSON object:
+{{
+  "found_internal_entries": true/false,
+  "keywords": ["keyword or short phrase", ...]
+}}
+
+If you find none, return {{"found_internal_entries": false, "keywords": []}}.
+Return ONLY the JSON object.
 """
 
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            raw_text = _complete_with_fallback(client, system_prompt, user_prompt, max_tokens=1000)
+            raw_text = _complete_with_fallback(client, system_prompt, user_prompt, max_tokens=500)
             raw_text = re.sub(r"^```[a-z]*\n?|```$", "", raw_text, flags=re.MULTILINE).strip()
-            parsed: dict[str, bool] = json.loads(raw_text)
-            return [bool(parsed.get(str(i), False)) for i in range(len(batch))]
+            parsed = json.loads(raw_text)
+            if not parsed.get("found_internal_entries"):
+                return []
+            keywords = [k.strip() for k in parsed.get("keywords", []) if k and k.strip()]
+            return keywords
         except (json.JSONDecodeError, _LLMUnavailable) as exc:
-            logger.warning("Internal-entry classification attempt %d failed: %s", attempt + 1, exc)
+            logger.warning("Internal-entry keyword discovery attempt %d failed: %s", attempt + 1, exc)
             time.sleep(2 ** attempt)
 
-    # On total failure, default to False (treat as real) — never silently
-    # discard something we couldn't confidently classify.
-    return [False for _ in batch]
+    # On total failure, find nothing — never guess, just fall back to
+    # whatever Layer 1's universal regex already caught.
+    return []
+
+
+# ===========================================================================
+# 7c. DUPLICATE DETECTOR
+#     Explicitly flags rows that look like the same real-world customer/vendor
+#     entered twice — e.g. "Chiaro Caffe-Lekki" and "Chiaro Caffe - Lekki" at
+#     the same address. Never merges or deletes anything; only tags rows with
+#     duplicate_of_row_<N> so a human confirms before either copy is removed.
+#
+#     IMPORTANT: name similarity alone is NOT enough. Two different branches
+#     of the same chain (e.g. "Gusto Restaurant - Kano" vs "Gusto Restaurant
+#     Kano" — actually Kano vs Abuja) can have near-identical names but are
+#     genuinely different customers. Address must also be checked before
+#     anything is flagged as a duplicate.
+# ===========================================================================
+
+def detect_duplicates(
+    df: pd.DataFrame,
+    name_col: str,
+    address_col: str | None,
+    client: anthropic.Anthropic | None,
+) -> dict[int, dict]:
+    """
+    Identify rows that are likely the SAME real-world entity entered more
+    than once in the source file.
+
+    Returns: { row_position: {"duplicate_of": earlier_row_position,
+                               "reason": human_readable_explanation} }
+    for every row judged to be a duplicate of an earlier row. The earlier
+    row in each pair is never flagged — only the later occurrence(s) — so
+    exactly one copy survives as "the" record once a human confirms.
+
+    Two-stage approach:
+
+    Stage 1 — Cheap name-similarity prefilter (no API cost).
+        Groups rows whose names collapse to the same value after stripping
+        all punctuation/spacing/case (e.g. "Chiaro Caffe-Lekki" and
+        "Chiaro Caffe - Lekki" both -> "chiarocaffelekki"). This is ONLY
+        a candidate filter — it does not by itself confirm a duplicate,
+        since two different branches can share this same collapsed name.
+
+    Stage 2 — AI confirms using BOTH name and address together.
+        For every candidate group from Stage 1, the AI is shown both the
+        name and address of each row and asked whether they describe the
+        same physical business/customer or two different ones (e.g. two
+        branches of a chain in different cities). Only pairs the AI
+        confirms are genuinely the same entity get flagged.
+
+    Without an address column or without a client, Stage 2 is skipped
+    entirely and nothing is flagged — a name match alone is not reliable
+    enough to act on (see the Gusto Restaurant Kano/Abuja example above).
+    """
+    flagged: dict[int, dict] = {}
+    if name_col not in df.columns:
+        return flagged
+
+    names = df[name_col].fillna("").astype(str)
+
+    def _collapse(s: str) -> str:
+        return re.sub(r"[^a-z0-9]", "", s.lower())
+
+    collapsed = names.apply(_collapse)
+
+    # --- Stage 1: group positions by collapsed name ---
+    groups: dict[str, list[int]] = {}
+    for pos, key in enumerate(collapsed):
+        if not key:
+            continue
+        groups.setdefault(key, []).append(pos)
+    candidate_groups = {k: v for k, v in groups.items() if len(v) > 1}
+
+    if not candidate_groups:
+        return flagged
+
+    logger.info("Duplicate detection: %d candidate name-collision groups found", len(candidate_groups))
+
+    # --- Stage 2: AI confirms using name + address together ---
+    if address_col is None or address_col not in df.columns or client is None:
+        logger.info(
+            "Duplicate detection: no address column or no client available — "
+            "skipping AI confirmation, nothing flagged (name match alone is not reliable)"
+        )
+        return flagged
+
+    addresses = df[address_col].fillna("").astype(str)
+
+    # Build one AI request per candidate group (groups are almost always size 2,
+    # occasionally 3 — batching multiple groups into one call keeps cost low)
+    group_items = list(candidate_groups.items())
+    batch_size = 15   # groups per AI call, not rows — each group has 2-3 rows
+
+    for i in range(0, len(group_items), batch_size):
+        batch = group_items[i : i + batch_size]
+        batch_payload = {}
+        for gi, (_, positions) in enumerate(batch):
+            batch_payload[str(gi)] = [
+                {"name": names.iloc[p], "address": addresses.iloc[p]}
+                for p in positions
+            ]
+        ai_results = _ai_confirm_duplicates_batch(batch_payload, client)
+
+        for gi, (_, positions) in enumerate(batch):
+            verdicts = ai_results.get(str(gi), [])
+            # verdicts[j] corresponds to positions[j] for j >= 1, telling us
+            # whether positions[j] is a duplicate of positions[0]
+            for j in range(1, len(positions)):
+                is_dupe = verdicts[j - 1] if (j - 1) < len(verdicts) else False
+                if is_dupe:
+                    flagged[positions[j]] = {
+                        "duplicate_of": positions[0],
+                        "reason": (
+                            f"Likely duplicate of row {positions[0] + 2} "
+                            f"(same name and address — AI confirmed)"
+                        ),
+                    }
+
+        if i + batch_size < len(group_items):
+            time.sleep(0.3)
+
+    if flagged:
+        logger.info("Duplicate detection: %d rows flagged as duplicates of an earlier row", len(flagged))
+    return flagged
+
+
+def _ai_confirm_duplicates_batch(
+    batch_payload: dict[str, list[dict]],
+    client: anthropic.Anthropic,
+) -> dict[str, list[bool]]:
+    """
+    For each group of candidate-duplicate rows (same collapsed name), ask the
+    AI whether each row after the first is the SAME real-world entity as the
+    first row in that group, using name AND address together.
+
+    Returns: { group_index: [bool, bool, ...] } — one bool per row AFTER the
+    first in that group (True = duplicate of the first row in the group).
+    """
+    system_prompt = (
+        "You are a data deduplication specialist for an Odoo ERP migration. "
+        "Return ONLY valid JSON — no prose, no code fences."
+    )
+    user_prompt = f"""Each group below contains rows whose names are nearly identical after
+removing punctuation/spacing. Your job: decide if the LATER rows in each group
+describe the SAME real-world customer/vendor as the FIRST row, or a DIFFERENT
+one (e.g. two separate branches of the same chain in different areas/cities).
+
+INPUT (JSON object — key = group index, value = list of {{name, address}}, in order):
+{json.dumps(batch_payload, indent=2)}
+
+For each group, compare every row AFTER the first one to the FIRST row in
+that group. Use BOTH name and address — if the addresses clearly describe
+different locations (different street, different area, different city),
+they are DIFFERENT entities even if the names are nearly identical (this
+commonly happens with multiple branches of the same business).
+
+Return a JSON object where each key is the same group index and the value is
+a list of booleans — one per row after the first — true if that row is the
+SAME entity as the group's first row, false if it is a different branch/entity:
+{{
+  "0": [true],
+  "1": [false]
+}}
+
+Return ONLY the JSON object.
+"""
+
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            raw_text = _complete_with_fallback(client, system_prompt, user_prompt, max_tokens=1500)
+            raw_text = re.sub(r"^```[a-z]*\n?|```$", "", raw_text, flags=re.MULTILINE).strip()
+            parsed: dict[str, list[bool]] = json.loads(raw_text)
+            return parsed
+        except (json.JSONDecodeError, _LLMUnavailable) as exc:
+            logger.warning("Duplicate confirmation attempt %d failed: %s", attempt + 1, exc)
+            time.sleep(2 ** attempt)
+
+    # On total failure, flag nothing — never guess a real customer away.
+    return {}
 
 
 
@@ -2195,68 +2440,105 @@ def validate_and_split(
     df: pd.DataFrame,
     data_type: str,
     client: anthropic.Anthropic | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame, list[int]]:
+) -> tuple[pd.DataFrame, pd.DataFrame, list[int], dict[str, int]]:
     """
-    Check every row for the mandatory field AND for signs of being an internal
-    accounting/bookkeeping entry rather than a real customer/vendor — but,
-    unlike the old behavior, do NOT remove failing/flagged rows from the main
-    DataFrame. They stay in place (so the output file's row count always
-    matches the input) and are instead flagged for the caller to highlight.
+    Check every row for the mandatory field, for signs of being an internal
+    accounting/bookkeeping entry, and for being a likely duplicate of an
+    earlier row — but, unlike the old behavior, do NOT remove flagged rows
+    from the main DataFrame. They stay in place (so the output file's row
+    count always matches the input) and are instead flagged for the caller
+    to highlight, each with a specific machine-readable reason code.
 
-    Two independent checks per row, either of which can flag it:
-      1. Missing mandatory field (Name / Vendor Name) — existing behavior.
-      2. Looks like an internal accounting entry (e.g. "Bad & Damage Lagos",
-         "Suspense Account") rather than a real person or business — see
-         detect_internal_entries(). Never auto-removed; always routed to the
-         error sheet for a human to confirm, since this judgment call can be
-         wrong (a real customer could share a category with these entries).
+    Every row that doesn't make it into the clean bucket is accounted for
+    with exactly ONE of these reason codes (priority order — a row matching
+    more than one check is reported under the highest-priority reason only,
+    so the breakdown numbers always sum to the total flagged count):
+
+      1. "missing_mandatory_field" — Name / Vendor Name is blank.
+      2. "duplicate_of_row_N"      — looks like the same entity as an
+         earlier row (see detect_duplicates()). The reason string includes
+         which earlier row it duplicates.
+      3. "flagged_internal_entry" — looks like a bookkeeping/accounting
+         line item rather than a real customer/vendor (see
+         detect_internal_entries()).
+
+    None of these are ever auto-removed — every judgment call here can be
+    wrong, so a human always gets the final say via the error sheet.
 
     Returns:
       - df: the same DataFrame, unchanged (all rows, original order)
-      - error_df: just the failing/flagged rows, with '_errors'/'_source_row'
-        columns added, for a separate explanatory sheet
+      - error_df: just the flagged rows, with '_reason_code', '_errors'
+        (human-readable text) and '_source_row' columns added
       - error_positions: 0-based *positional* row numbers (not pandas index
-        labels — upstream steps can leave index gaps, e.g. from dropping
-        blank rows without a reset_index) of the failing rows, so the caller
-        can map them to the correct Excel row number for highlighting.
+        labels — upstream steps can leave index gaps) of the flagged rows,
+        so the caller can map them to the correct Excel row for highlighting
+      - breakdown: { "clean": int, "missing_mandatory_field": int,
+        "duplicate_merged": int, "flagged_internal": int } — ready to hand
+        straight to the frontend as the structured stats response
     """
     mandatory = MANDATORY_FIELD[data_type]
     name_col = mandatory   # "Name" for customers, "Vendor Name" for vendors
     category_col = next((c for c in df.columns if c.lower() == "category"), None)
+    address_col = next((c for c in df.columns if c.lower() == "street"), None)
 
-    # Run internal-entry detection once up front — cheap regex pass always,
-    # AI pass only for the small number of rows in a "leaning" category.
+    # Run the two advisory detectors once up front.
     internal_flags = detect_internal_entries(df, name_col, category_col, client)
+    duplicate_flags = detect_duplicates(df, name_col, address_col, client)
 
     errors: list[dict] = []
     error_positions: list[int] = []
+    breakdown = {
+        "clean": 0,
+        "missing_mandatory_field": 0,
+        "duplicate_merged": 0,
+        "flagged_internal": 0,
+    }
 
     for pos, (_, row) in enumerate(df.iterrows()):
-        row_errors: list[str] = []
+        reason_code: str | None = None
+        reason_text: str | None = None
 
-        # Check mandatory field
+        # Priority 1: missing mandatory field
         val = row.get(mandatory)
         if pd.isna(val) or (isinstance(val, str) and not val.strip()):
-            row_errors.append(f"Missing mandatory field: '{mandatory}'")
+            reason_code = "missing_mandatory_field"
+            reason_text = f"Missing mandatory field: '{mandatory}'"
 
-        # Check internal-entry flag
-        if pos in internal_flags:
-            row_errors.append(internal_flags[pos])
+        # Priority 2: duplicate of an earlier row
+        elif pos in duplicate_flags:
+            dup_of = duplicate_flags[pos]["duplicate_of"]
+            reason_code = f"duplicate_of_row_{dup_of + 2}"   # Excel row number
+            reason_text = duplicate_flags[pos]["reason"]
 
-        if row_errors:
+        # Priority 3: internal accounting entry
+        elif pos in internal_flags:
+            reason_code = "flagged_internal_entry"
+            reason_text = internal_flags[pos]
+
+        if reason_code:
             err_row = row.to_dict()
-            err_row["_errors"] = " | ".join(row_errors)
+            err_row["_reason_code"] = reason_code
+            err_row["_errors"] = reason_text
             err_row["_source_row"] = pos + 2   # Excel 1-indexed + header row
             errors.append(err_row)
             error_positions.append(pos)
 
+            if reason_code == "missing_mandatory_field":
+                breakdown["missing_mandatory_field"] += 1
+            elif reason_code.startswith("duplicate_of_row_"):
+                breakdown["duplicate_merged"] += 1
+            elif reason_code == "flagged_internal_entry":
+                breakdown["flagged_internal"] += 1
+        else:
+            breakdown["clean"] += 1
+
     error_df = pd.DataFrame(errors)
 
     logger.info(
-        "Validation: %d clean rows, %d error rows",
-        len(df) - len(error_positions), len(error_df)
+        "Validation breakdown: %s",
+        json.dumps(breakdown, indent=2),
     )
-    return df, error_df, error_positions
+    return df, error_df, error_positions, breakdown
 
 
 # ===========================================================================
@@ -2278,8 +2560,21 @@ def process_file(
             "status": "success" | "partial" | "error",
             "message": str,
             "output_path": str | None,
-            "stats": { "total": int, "clean": int, "errors": int }
+            "stats": {
+                "total": int,               # rows in the input file
+                "clean": int,               # rows that passed every check
+                "errors": int,               # total flagged rows (clean + errors == total)
+                "missing_mandatory_field": int,  # e.g. blank "Name" / "Vendor Name"
+                "duplicate_merged": int,         # flagged as same entity as an earlier row
+                "flagged_internal": int,         # looks like a bookkeeping entry, not a real customer
+            }
         }
+
+    Every row in the input is accounted for by exactly one bucket in `stats`
+    (clean + missing_mandatory_field + duplicate_merged + flagged_internal
+    always sums to `total`) — the frontend can build an informative status
+    breakdown straight from this dict instead of a flat "Partial" badge with
+    no explanation for the row-count gap.
     """
     input_path = Path(input_path)
     if data_type not in SCHEMA_MAP:
@@ -2334,8 +2629,10 @@ def process_file(
         df_mapped = rule_based_clean(df_mapped, data_type)
 
         # 8. Validate (rows stay in place — failures are flagged, not removed)
-        df_final, df_errors, error_positions = validate_and_split(df_mapped, data_type, client=client)
-        clean_count = len(df_final) - len(df_errors)
+        df_final, df_errors, error_positions, breakdown = validate_and_split(
+            df_mapped, data_type, client=client
+        )
+        clean_count = breakdown["clean"]
 
         # 9. Write output — one workbook, two sheets: "Data" (everything, with
         # failing rows highlighted red) and "Errors" (the same failing rows
@@ -2358,14 +2655,28 @@ def process_file(
         logger.info("Output written to '%s'", output_path)
 
         status = "success" if df_errors.empty else "partial"
+
+        # Build an informative message that explains the row-count gap instead
+        # of a flat "X clean, Y errors" that hides WHY rows were flagged.
+        message_parts = [f"Processed {total_rows} rows → {clean_count} clean"]
+        if breakdown["duplicate_merged"]:
+            message_parts.append(f"{breakdown['duplicate_merged']} possible duplicates")
+        if breakdown["missing_mandatory_field"]:
+            message_parts.append(f"{breakdown['missing_mandatory_field']} missing required fields")
+        if breakdown["flagged_internal"]:
+            message_parts.append(f"{breakdown['flagged_internal']} flagged as internal entries")
+
         return {
             "status": status,
-            "message": f"Processed {total_rows} rows → {clean_count} clean, {len(df_errors)} errors.",
+            "message": ", ".join(message_parts) + ".",
             "output_path": str(output_path),
             "stats": {
                 "total": total_rows,
                 "clean": clean_count,
                 "errors": len(df_errors),
+                "missing_mandatory_field": breakdown["missing_mandatory_field"],
+                "duplicate_merged": breakdown["duplicate_merged"],
+                "flagged_internal": breakdown["flagged_internal"],
             },
         }
 
@@ -2375,7 +2686,14 @@ def process_file(
             "status": "error",
             "message": str(exc),
             "output_path": None,
-            "stats": {"total": 0, "clean": 0, "errors": 0},
+            "stats": {
+                "total": 0,
+                "clean": 0,
+                "errors": 0,
+                "missing_mandatory_field": 0,
+                "duplicate_merged": 0,
+                "flagged_internal": 0,
+            },
         }
 
 
