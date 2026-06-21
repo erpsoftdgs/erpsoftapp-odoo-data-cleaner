@@ -14,6 +14,7 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { BASE_PATH } from '@/lib/base-path';
+import { breakdownPhrase } from '@/lib/conversion-format';
 
 // Mirrors the engine's SCHEMA_MAP (engine/odoo_data_engine.py) — the engine
 // only knows how to clean these record types, so this must stay in sync.
@@ -33,6 +34,9 @@ type ConversionResult = {
   total: number;
   clean: number;
   errors: number;
+  missingFields: number;
+  duplicates: number;
+  internal: number;
 };
 
 export default function HomeClient() {
@@ -97,6 +101,9 @@ export default function HomeClient() {
         total: Number(response.headers.get('X-Rows-Total')) || 0,
         clean: Number(response.headers.get('X-Rows-Clean')) || 0,
         errors: Number(response.headers.get('X-Rows-Errors')) || 0,
+        missingFields: Number(response.headers.get('X-Rows-Missing-Fields')) || 0,
+        duplicates: Number(response.headers.get('X-Rows-Duplicates')) || 0,
+        internal: Number(response.headers.get('X-Rows-Internal')) || 0,
       });
 
       const blob = await response.blob();
@@ -284,9 +291,10 @@ export default function HomeClient() {
               <AlertCircle className="w-5 h-5 mr-3 flex-shrink-0" />
               <span>
                 Downloaded — but <strong>{result.errors}</strong> of {result.total} row
-                {result.total === 1 ? '' : 's'} need review. They&apos;re still in the file,
-                highlighted in red on the <strong>Data</strong> sheet, with the reason listed
-                on the <strong>Errors</strong> sheet.
+                {result.total === 1 ? '' : 's'} need review
+                {breakdownPhrase(result) && <> ({breakdownPhrase(result)})</>}. They&apos;re
+                still in the file, highlighted in red on the <strong>Data</strong> sheet, with
+                the reason listed on the <strong>Errors</strong> sheet.
               </span>
             </div>
           )}

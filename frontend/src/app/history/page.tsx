@@ -1,8 +1,8 @@
 import { redirect } from 'next/navigation';
-import { History, Download } from 'lucide-react';
+import { History, Download, ChevronDown } from 'lucide-react';
 import { getSession } from '@/lib/auth';
 import db from '@/lib/db';
-import { formatDate, formatDuration, statusStyles } from '@/lib/conversion-format';
+import { formatDate, formatDuration, statusStyles, breakdownPhrase } from '@/lib/conversion-format';
 import { BASE_PATH } from '@/lib/base-path';
 
 export const dynamic = 'force-dynamic';
@@ -14,6 +14,9 @@ type ConversionRow = {
   rows_uploaded: number;
   rows_cleaned: number;
   rows_errors: number;
+  rows_missing_fields: number;
+  rows_duplicates: number;
+  rows_internal: number;
   conversion_ms: number;
   status: string;
   created_at: number;
@@ -31,7 +34,7 @@ export default async function HistoryPage() {
 
   return (
     <main className="flex-1 bg-slate-50 p-4 sm:p-8">
-      <div className="max-w-5xl mx-auto">
+      <div className="max-w-7xl mx-auto">
         <div className="flex items-center gap-3 mb-6">
           <History className="w-6 h-6 text-brand-blue" />
           <div>
@@ -52,40 +55,59 @@ export default async function HistoryPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="bg-slate-50 border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
-                    <th className="px-4 py-3 font-semibold">Date</th>
-                    <th className="px-4 py-3 font-semibold">File</th>
-                    <th className="px-4 py-3 font-semibold text-right">Rows uploaded</th>
-                    <th className="px-4 py-3 font-semibold text-right">Rows cleaned</th>
-                    <th className="px-4 py-3 font-semibold">Conversion time</th>
-                    <th className="px-4 py-3 font-semibold">Last accessed</th>
-                    <th className="px-4 py-3 font-semibold">Status</th>
-                    <th className="px-4 py-3 font-semibold">Download</th>
+                    <th className="px-3 py-3 font-semibold">Date</th>
+                    <th className="px-3 py-3 font-semibold">File</th>
+                    <th className="px-3 py-3 font-semibold text-right">Uploaded</th>
+                    <th className="px-3 py-3 font-semibold text-right">Cleaned</th>
+                    <th className="px-3 py-3 font-semibold">Time</th>
+                    <th className="px-3 py-3 font-semibold">Accessed</th>
+                    <th className="px-3 py-3 font-semibold">Status</th>
+                    <th className="px-3 py-3 font-semibold">Download</th>
                   </tr>
                 </thead>
                 <tbody>
                   {rows.map((row) => (
                     <tr key={row.id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/60">
-                      <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{formatDate(row.created_at)}</td>
-                      <td className="px-4 py-3 text-slate-500">
+                      <td className="px-3 py-3 text-slate-500 whitespace-nowrap">{formatDate(row.created_at)}</td>
+                      <td className="px-3 py-3 text-slate-500">
                         <span className="block max-w-[16rem] truncate" title={row.filename}>
                           {row.filename}
                         </span>
                         <span className="text-xs text-slate-400 capitalize">{row.data_type}</span>
                       </td>
-                      <td className="px-4 py-3 text-right text-slate-700 tabular-nums">{row.rows_uploaded}</td>
-                      <td className="px-4 py-3 text-right text-slate-700 tabular-nums">{row.rows_cleaned}</td>
-                      <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{formatDuration(row.conversion_ms)}</td>
-                      <td className="px-4 py-3 text-slate-500 whitespace-nowrap">{formatDate(row.downloaded_at)}</td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium capitalize ${
-                            statusStyles[row.status] ?? 'bg-slate-100 text-slate-600'
-                          }`}
-                        >
-                          {row.status}
-                        </span>
+                      <td className="px-3 py-3 text-right text-slate-700 tabular-nums">{row.rows_uploaded}</td>
+                      <td className="px-3 py-3 text-right text-slate-700 tabular-nums">{row.rows_cleaned}</td>
+                      <td className="px-3 py-3 text-slate-500 whitespace-nowrap">{formatDuration(row.conversion_ms)}</td>
+                      <td className="px-3 py-3 text-slate-500 whitespace-nowrap">{formatDate(row.downloaded_at)}</td>
+                      <td className="px-3 py-3">
+                        {(() => {
+                          const phrase = breakdownPhrase({
+                            missingFields: row.rows_missing_fields,
+                            duplicates: row.rows_duplicates,
+                            internal: row.rows_internal,
+                          });
+                          const badge = (
+                            <span
+                              className={`inline-block px-2 py-0.5 rounded-full text-xs font-medium capitalize ${
+                                statusStyles[row.status] ?? 'bg-slate-100 text-slate-600'
+                              }`}
+                            >
+                              {row.status}
+                            </span>
+                          );
+                          if (!phrase) return badge;
+                          return (
+                            <details className="group">
+                              <summary className="inline-flex items-center gap-1 cursor-pointer list-none [&::-webkit-details-marker]:hidden">
+                                {badge}
+                                <ChevronDown className="w-3 h-3 text-slate-400 group-open:rotate-180 transition-transform" />
+                              </summary>
+                              <p className="mt-1.5 text-xs text-slate-500 max-w-[14rem]">{phrase}</p>
+                            </details>
+                          );
+                        })()}
                       </td>
-                      <td className="px-4 py-3 whitespace-nowrap">
+                      <td className="px-3 py-3 whitespace-nowrap">
                         {row.output_filename ? (
                           <a
                             href={`${BASE_PATH}/api/conversions/${row.id}/download`}

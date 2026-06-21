@@ -66,7 +66,14 @@ export async function POST(request: Request) {
       status?: string;
       message?: string;
       download_url?: string;
-      stats?: { total?: number; clean?: number; errors?: number };
+      stats?: {
+        total?: number;
+        clean?: number;
+        errors?: number;
+        missing_mandatory_field?: number;
+        duplicate_merged?: number;
+        flagged_internal?: number;
+      };
     } | null;
 
     if (!cleanResponse.ok || !cleanResult) {
@@ -100,8 +107,9 @@ export async function POST(request: Request) {
     const stats = cleanResult.stats || {};
     const { lastInsertRowid } = db.prepare(
       `INSERT INTO conversions
-         (user_email, data_type, filename, rows_uploaded, rows_cleaned, rows_errors, conversion_ms, status, created_at, downloaded_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         (user_email, data_type, filename, rows_uploaded, rows_cleaned, rows_errors,
+          rows_missing_fields, rows_duplicates, rows_internal, conversion_ms, status, created_at, downloaded_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       session.email,
       dataType,
@@ -109,6 +117,9 @@ export async function POST(request: Request) {
       Number(stats.total) || 0,
       Number(stats.clean) || 0,
       Number(stats.errors) || 0,
+      Number(stats.missing_mandatory_field) || 0,
+      Number(stats.duplicate_merged) || 0,
+      Number(stats.flagged_internal) || 0,
       finishedAt - startedAt,
       String(cleanResult.status),
       finishedAt,
@@ -139,6 +150,9 @@ export async function POST(request: Request) {
         'X-Rows-Total': String(stats.total ?? 0),
         'X-Rows-Clean': String(stats.clean ?? 0),
         'X-Rows-Errors': String(stats.errors ?? 0),
+        'X-Rows-Missing-Fields': String(stats.missing_mandatory_field ?? 0),
+        'X-Rows-Duplicates': String(stats.duplicate_merged ?? 0),
+        'X-Rows-Internal': String(stats.flagged_internal ?? 0),
       },
     });
   } catch (error: unknown) {

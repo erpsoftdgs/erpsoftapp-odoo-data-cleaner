@@ -34,6 +34,9 @@ db.exec(`
     rows_uploaded INTEGER NOT NULL,
     rows_cleaned INTEGER NOT NULL,
     rows_errors INTEGER NOT NULL,
+    rows_missing_fields INTEGER NOT NULL DEFAULT 0,
+    rows_duplicates INTEGER NOT NULL DEFAULT 0,
+    rows_internal INTEGER NOT NULL DEFAULT 0,
     conversion_ms INTEGER NOT NULL,
     status TEXT NOT NULL,
     created_at INTEGER NOT NULL,
@@ -44,11 +47,23 @@ db.exec(`
 `);
 
 // Runtime migration: CREATE TABLE IF NOT EXISTS doesn't alter an existing
-// table, so add the persisted-file column for dev DBs created before this
-// feature existed. New rows from fresh installs already match this shape.
+// table, so add columns for dev DBs created before a given feature existed.
+// New rows from fresh installs already match this shape.
 const conversionColumns = db.prepare("PRAGMA table_info(conversions)").all() as { name: string }[];
-if (!conversionColumns.some((c) => c.name === "output_filename")) {
+const hasConversionColumn = (name: string) => conversionColumns.some((c) => c.name === name);
+
+if (!hasConversionColumn("output_filename")) {
   db.exec("ALTER TABLE conversions ADD COLUMN output_filename TEXT");
+}
+
+// rows_errors is the total flagged count; these three subdivide it by reason
+// (engine/odoo_data_engine.py's validate_and_split breakdown). Rows created
+// before this existed have no breakdown — default to 0 rather than NULL so
+// the UI can sum/compare them without null-checks everywhere.
+for (const col of ["rows_missing_fields", "rows_duplicates", "rows_internal"]) {
+  if (!hasConversionColumn(col)) {
+    db.exec(`ALTER TABLE conversions ADD COLUMN ${col} INTEGER NOT NULL DEFAULT 0`);
+  }
 }
 
 export default db;
