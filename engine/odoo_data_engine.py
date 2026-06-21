@@ -1243,7 +1243,7 @@ _NG_STATES: dict[str, str] = {
     "bayelsa": "Bayelsa", "benue": "Benue", "borno": "Borno",
     "cross river": "Cross River", "crossriver": "Cross River",
     "delta": "Delta", "ebonyi": "Ebonyi", "edo": "Edo",
-    "ekiti": "Ekiti", "enugu": "Enugu", "fct": "FCT", "abuja": "FCT",
+    "ekiti": "Ekiti", "enugu": "Enugu", "fct": "FCT", "federal capital territory": "FCT", "abuja": "FCT",
     "gombe": "Gombe", "imo": "Imo", "jigawa": "Jigawa",
     "kaduna": "Kaduna", "kano": "Kano", "katsina": "Katsina",
     "kebbi": "Kebbi", "kogi": "Kogi", "kwara": "Kwara",
