@@ -22,7 +22,8 @@ import os
 import pandas as pd
 import urllib.error
 import urllib.request
-from openpyxl.styles import PatternFill
+from openpyxl.styles import PatternFill, Font
+from openpyxl.utils import get_column_letter
 
 
 # ---------------------------------------------------------------------------
@@ -1059,6 +1060,18 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
         mask = df[note_col].isna() | (df[note_col].astype(str).str.strip() == "")
         df.loc[mask, note_col] = df.loc[mask, branch_col]
 
+    # --- State: final normalization pass ---
+    # Runs after every step that can populate this column (rule-based
+    # extraction above, plus — by the time this function's second call
+    # happens, post-mapping — AI address splitting, the AI country/state
+    # fallback, and AI field cleaning, all of which can produce a verbose
+    # synonym like "Federal Capital Territory" instead of "FCT"). Safe
+    # no-op on the first call (pre-mapping), since the State column won't
+    # exist under its mapped name yet.
+    _final_state_col = next((c for c in df.columns if c.lower() in ("state", "state_id")), None)
+    if _final_state_col:
+        df[_final_state_col] = df[_final_state_col].apply(_normalize_ng_state)
+
     return df
 
 
@@ -1383,6 +1396,37 @@ _STATE_REGEX = re.compile(
     r"\b(" + "|".join(re.escape(s) for s in _STATE_NAMES_SORTED) + r")\s*(state)?\b",
     re.IGNORECASE,
 )
+
+
+def _normalize_ng_state(value: Any) -> Any:
+    """
+    Canonicalize a Nigerian state name/synonym to Odoo's expected spelling
+    (e.g. "Federal Capital Territory" or "Abuja" -> "FCT") via the same
+    _NG_STATES lookup _extract_state_country_from_row uses. Plain dict
+    lookup — no AI call.
+
+    This exists as a single, final pass over the State column rather than
+    another spot fix in whichever step happened to produce the wrong value.
+    The State value can come from four different places (rule-based
+    extraction, AI address splitting, the AI country/state fallback, or AI
+    field cleaning), and each of those AI prompts only lists "FCT" as one
+    example state among many rather than explicitly instructing
+    abbreviation — so fixing one path leaves the same gap open in the
+    other three. Running this once, after every other step has already
+    populated the column, closes all of them at once. Values not found in
+    the table (e.g. non-Nigerian states/counties) are returned unchanged.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return value
+    key = value.strip().lower()
+    if key in _NG_STATES:
+        return _NG_STATES[key]
+    # Strip a trailing "state" suffix (e.g. "Ogun State" -> "ogun") and
+    # retry — mirrors _STATE_REGEX's optional "state" suffix handling, so
+    # this pass stays consistent with what the rule-based extraction path
+    # already accepts.
+    stripped = re.sub(r"\s+state$", "", key).strip()
+    return _NG_STATES.get(stripped, value)
 
 
 def _extract_state_country_from_row(combined: str) -> tuple[str | None, str | None]:
@@ -2542,6 +2586,40 @@ def validate_and_split(
 
 
 # ===========================================================================
+# 7d. OUTPUT WORKBOOK STYLING
+# ===========================================================================
+
+_HEADER_FILL = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
+_HEADER_FONT = Font(color="FFFFFF", bold=True)
+
+
+def _style_worksheet(ws, min_width: int = 8, max_width: int = 40) -> None:
+    """
+    Bold white-on-blue header row + auto-sized column widths, applied to a
+    just-written openpyxl worksheet. Pandas' to_excel() writes plain data
+    with no formatting at all — every column defaults to the same narrow
+    width regardless of content, so anything longer than a few characters
+    looks truncated/cramped until a human manually resizes it in Excel.
+
+    Width is based on the longest cell (including the header) in each
+    column, clamped to [min_width, max_width] so one extreme outlier
+    (e.g. a long address) doesn't blow out the whole sheet.
+    """
+    for cell in ws[1]:
+        cell.fill = _HEADER_FILL
+        cell.font = _HEADER_FONT
+
+    for col_idx in range(1, ws.max_column + 1):
+        longest = 0
+        for row in ws.iter_rows(min_col=col_idx, max_col=col_idx):
+            cell = row[0]
+            if cell.value is not None:
+                longest = max(longest, len(str(cell.value)))
+        width = min(max(longest + 2, min_width), max_width)
+        ws.column_dimensions[get_column_letter(col_idx)].width = width
+
+
+# ===========================================================================
 # 8. MAIN PIPELINE ORCHESTRATOR
 # ===========================================================================
 
@@ -2634,12 +2712,21 @@ def process_file(
         )
         clean_count = breakdown["clean"]
 
-        # 9. Write output — one workbook, two sheets: "Data" (everything, with
-        # failing rows highlighted red) and "Errors" (the same failing rows
-        # plus the reason, for reference). Keeps every input row reachable in
-        # the single file the frontend already serves, instead of silently
-        # dropping rows into a second file nothing ever exposes for download.
+        # 9. Write output — one workbook, three sheets:
+        #      "Cleaned" — only rows that passed every check, ready to import
+        #      "Data"    — every row, flagged ones highlighted red
+        #      "Errors"  — just the flagged rows, with the reason
+        #    Keeps every input row reachable in the single file the frontend
+        #    already serves, instead of silently dropping rows into a second
+        #    file nothing ever exposes for download, while still giving a
+        #    straight-to-import sheet for the common case of "just give me
+        #    the clean rows".
+        error_position_set = set(error_positions)
+        clean_mask = [i not in error_position_set for i in range(len(df_final))]
+        df_cleaned = df_final.iloc[clean_mask]
+
         with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+            df_cleaned.to_excel(writer, sheet_name="Cleaned", index=False)
             df_final.to_excel(writer, sheet_name="Data", index=False)
             if not df_errors.empty:
                 df_errors.to_excel(writer, sheet_name="Errors", index=False)
@@ -2651,6 +2738,10 @@ def process_file(
                     excel_row = pos + 2   # +1 for header, +1 for 1-indexing
                     for cell in ws[excel_row]:
                         cell.fill = fill
+
+            for sheet_name in ("Cleaned", "Data", "Errors"):
+                if sheet_name in writer.sheets:
+                    _style_worksheet(writer.sheets[sheet_name])
 
         logger.info("Output written to '%s'", output_path)
 
