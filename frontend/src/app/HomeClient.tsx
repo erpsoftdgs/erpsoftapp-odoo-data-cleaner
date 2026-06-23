@@ -37,6 +37,7 @@ type ConversionResult = {
   missingFields: number;
   duplicates: number;
   internal: number;
+  isCompanyFlag: number;
 };
 
 export default function HomeClient() {
@@ -104,6 +105,7 @@ export default function HomeClient() {
         missingFields: Number(response.headers.get('X-Rows-Missing-Fields')) || 0,
         duplicates: Number(response.headers.get('X-Rows-Duplicates')) || 0,
         internal: Number(response.headers.get('X-Rows-Internal')) || 0,
+        isCompanyFlag: Number(response.headers.get('X-Rows-Is-Company-Flag')) || 0,
       });
 
       const blob = await response.blob();

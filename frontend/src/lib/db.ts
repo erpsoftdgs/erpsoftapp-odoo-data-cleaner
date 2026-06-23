@@ -58,6 +58,7 @@ try {
       rows_missing_fields INTEGER NOT NULL DEFAULT 0,
       rows_duplicates INTEGER NOT NULL DEFAULT 0,
       rows_internal INTEGER NOT NULL DEFAULT 0,
+      rows_is_company_flag INTEGER NOT NULL DEFAULT 0,
       conversion_ms INTEGER NOT NULL,
       status TEXT NOT NULL,
       created_at INTEGER NOT NULL,
@@ -77,11 +78,11 @@ try {
     db.exec("ALTER TABLE conversions ADD COLUMN output_filename TEXT");
   }
 
-  // rows_errors is the total flagged count; these three subdivide it by reason
+  // rows_errors is the total flagged count; these four subdivide it by reason
   // (engine/odoo_data_engine.py's validate_and_split breakdown). Rows created
   // before this existed have no breakdown — default to 0 rather than NULL so
   // the UI can sum/compare them without null-checks everywhere.
-  for (const col of ["rows_missing_fields", "rows_duplicates", "rows_internal"]) {
+  for (const col of ["rows_missing_fields", "rows_duplicates", "rows_internal", "rows_is_company_flag"]) {
     if (!hasConversionColumn(col)) {
       db.exec(`ALTER TABLE conversions ADD COLUMN ${col} INTEGER NOT NULL DEFAULT 0`);
     }

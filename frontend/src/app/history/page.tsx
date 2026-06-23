@@ -17,6 +17,7 @@ type ConversionRow = {
   rows_missing_fields: number;
   rows_duplicates: number;
   rows_internal: number;
+  rows_is_company_flag: number;
   conversion_ms: number;
   status: string;
   created_at: number;
@@ -85,6 +86,7 @@ export default async function HistoryPage() {
                             missingFields: row.rows_missing_fields,
                             duplicates: row.rows_duplicates,
                             internal: row.rows_internal,
+                            isCompanyFlag: row.rows_is_company_flag,
                           });
                           const badge = (
                             <span

@@ -73,6 +73,7 @@ export async function POST(request: Request) {
         missing_mandatory_field?: number;
         duplicate_merged?: number;
         flagged_internal?: number;
+        suspicious_is_company_flag?: number;
       };
     } | null;
 
@@ -108,8 +109,9 @@ export async function POST(request: Request) {
     const { lastInsertRowid } = db.prepare(
       `INSERT INTO conversions
          (user_email, data_type, filename, rows_uploaded, rows_cleaned, rows_errors,
-          rows_missing_fields, rows_duplicates, rows_internal, conversion_ms, status, created_at, downloaded_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          rows_missing_fields, rows_duplicates, rows_internal, rows_is_company_flag,
+          conversion_ms, status, created_at, downloaded_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       session.email,
       dataType,
@@ -120,6 +122,7 @@ export async function POST(request: Request) {
       Number(stats.missing_mandatory_field) || 0,
       Number(stats.duplicate_merged) || 0,
       Number(stats.flagged_internal) || 0,
+      Number(stats.suspicious_is_company_flag) || 0,
       finishedAt - startedAt,
       String(cleanResult.status),
       finishedAt,
@@ -153,6 +156,7 @@ export async function POST(request: Request) {
         'X-Rows-Missing-Fields': String(stats.missing_mandatory_field ?? 0),
         'X-Rows-Duplicates': String(stats.duplicate_merged ?? 0),
         'X-Rows-Internal': String(stats.flagged_internal ?? 0),
+        'X-Rows-Is-Company-Flag': String(stats.suspicious_is_company_flag ?? 0),
       },
     });
   } catch (error: unknown) {
