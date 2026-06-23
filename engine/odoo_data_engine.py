@@ -43,7 +43,6 @@ logger = logging.getLogger("odoo_engine")
 # ===========================================================================
 
 CUSTOMER_SCHEMA: dict[str, dict] = {
-    "Title":                      {"required": False, "default": None, "dtype": "str"},
     "Name":                       {"required": True,  "default": None, "dtype": "str"},
     "Job Position":               {"required": False, "default": None, "dtype": "str"},
     "Mobile":                     {"required": False, "default": None, "dtype": "str"},
@@ -56,7 +55,6 @@ CUSTOMER_SCHEMA: dict[str, dict] = {
     "Zip":                        {"required": False, "default": None, "dtype": "str"},
     "Country":                    {"required": False, "default": None, "dtype": "str"},
     "Website":                    {"required": False, "default": None, "dtype": "str"},
-    "Company":                    {"required": False, "default": None, "dtype": "str"},
     "Is a Company":               {"required": False, "default": True,  "dtype": "bool"},
     "Reference":                  {"required": False, "default": None, "dtype": "str"},
     "Credit Limit":               {"required": False, "default": 0,    "dtype": "float"},
@@ -806,6 +804,12 @@ MAPPING RULES:
 5. For child/contact columns match appropriately (e.g. "child_ids/name"→"contacts / name").
 6. If a raw column contains combined address data (street + city + state in one cell),
    map it to "Street" AND add its raw column name to "needs_address_split".
+7. If a raw column clearly represents a DIFFERENT individual contact person than the main
+   record itself (e.g. "Contact Person", "Attn", "Attention", "C/O", "Care Of", "Contact",
+   "Representative") — i.e. it names someone other than the company/individual identified
+   in the main name column — map it to "contacts / name", NEVER to "Name". The main "Name"
+   field must always hold the record's own identity (the company name when "Is a Company"
+   is true, or the individual's own name when false), not a secondary contact person.
 
 FLAG RULES:
 - "needs_address_split": list raw column names where sample values combine multiple address
@@ -2479,6 +2483,92 @@ Return ONLY the JSON object.
     return {}
 
 
+# ===========================================================================
+# 7d. "IS A COMPANY" FLAG MISMATCH DETECTOR
+#     Flags rows where the client's own data suggests "Is a Company" is
+#     likely wrong — specifically: Name and the contact person's name
+#     (contacts / name) hold the SAME value (e.g. both = "Ali Sharafedeen")
+#     while Is a Company = True. A genuine company record's contact person
+#     should be someone OTHER than the company itself — if the "company"
+#     and its own contact are the exact same name, this is usually really
+#     an individual that got marked Is a Company = True by mistake on the
+#     client's side. Like every other advisory detector in this engine,
+#     nothing is ever auto-corrected; flagged rows are routed to the error
+#     sheet for a human to confirm either direction.
+# ===========================================================================
+
+def detect_suspicious_is_company_flags(
+    df: pd.DataFrame,
+    name_col: str,
+    contact_name_col: str | None,
+    is_company_col: str | None,
+) -> dict[int, str]:
+    """
+    Identify rows where Is a Company is likely wrong because:
+      1. Name and contacts / name hold the same value (case/whitespace-
+         insensitive) — a real company's contact person should be someone
+         other than the company itself, not just repeat the company's own
+         name, and
+      2. Is a Company is set to True for that row, and
+      3. The name itself looks like a person's name, not a business name
+         (reuses the same shape rules as infer_is_company()).
+
+    All three conditions must hold — any one alone is too weak to act on:
+      - Name == contacts/name alone could be a genuine one-person company
+        that listed itself as its own contact.
+      - Is a Company == True alone is just the normal default.
+      - Looks-like-a-person alone is exactly what infer_is_company() already
+        uses to PICK a value when none exists — this check is specifically
+        for when the client supplied an explicit value that contradicts
+        their own data.
+
+    Returns: { row_position: reason_string } for every row flagged.
+    Never modifies the DataFrame — purely advisory.
+    """
+    flagged: dict[int, str] = {}
+    if name_col not in df.columns or contact_name_col is None or is_company_col is None:
+        return flagged
+    if contact_name_col not in df.columns or is_company_col not in df.columns:
+        return flagged
+
+    names = df[name_col].fillna("").astype(str)
+    contacts = df[contact_name_col].fillna("").astype(str)
+    is_company_vals = df[is_company_col]
+
+    def _norm(s: str) -> str:
+        return re.sub(r"\s+", " ", s.strip().lower())
+
+    for pos in range(len(df)):
+        name = names.iloc[pos].strip()
+        contact = contacts.iloc[pos].strip()
+        if not name or not contact:
+            continue   # need both fields populated to compare them
+
+        same_value = _norm(name) == _norm(contact)
+        if not same_value:
+            continue
+
+        is_company_val = is_company_vals.iloc[pos]
+        marked_true = is_company_val is True or str(is_company_val).strip().lower() in ("true", "1", "yes")
+        if not marked_true:
+            continue
+
+        looks_personal = infer_is_company(name) is False
+        if not looks_personal:
+            continue
+
+        flagged[pos] = (
+            f"'Is a Company' is set to True, but '{name_col}' and '{contact_name_col}' "
+            f"both hold the same value ('{name}') and the name looks like a person, "
+            f"not a business — please confirm whether this should be 'Is a Company' = False"
+        )
+
+    if flagged:
+        logger.info(
+            "Is-a-Company mismatch detection: %d rows flagged for review", len(flagged)
+        )
+    return flagged
+
 
 def validate_and_split(
     df: pd.DataFrame,
@@ -2487,11 +2577,12 @@ def validate_and_split(
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[int], dict[str, int]]:
     """
     Check every row for the mandatory field, for signs of being an internal
-    accounting/bookkeeping entry, and for being a likely duplicate of an
-    earlier row — but, unlike the old behavior, do NOT remove flagged rows
-    from the main DataFrame. They stay in place (so the output file's row
-    count always matches the input) and are instead flagged for the caller
-    to highlight, each with a specific machine-readable reason code.
+    accounting/bookkeeping entry, for being a likely duplicate of an earlier
+    row, and for a suspicious "Is a Company" flag — but, unlike the old
+    behavior, do NOT remove flagged rows from the main DataFrame. They stay
+    in place (so the output file's row count always matches the input) and
+    are instead flagged for the caller to highlight, each with a specific
+    machine-readable reason code.
 
     Every row that doesn't make it into the clean bucket is accounted for
     with exactly ONE of these reason codes (priority order — a row matching
@@ -2505,6 +2596,11 @@ def validate_and_split(
       3. "flagged_internal_entry" — looks like a bookkeeping/accounting
          line item rather than a real customer/vendor (see
          detect_internal_entries()).
+      4. "suspicious_is_company_flag" — Name and contacts / name hold the
+         same value while Is a Company = True and the name looks like a
+         person, not a business (see detect_suspicious_is_company_flags())
+         — a common client data-entry mistake where an individual's name
+         gets copy-pasted into both fields with the company flag left on.
 
     None of these are ever auto-removed — every judgment call here can be
     wrong, so a human always gets the final say via the error sheet.
@@ -2517,17 +2613,21 @@ def validate_and_split(
         labels — upstream steps can leave index gaps) of the flagged rows,
         so the caller can map them to the correct Excel row for highlighting
       - breakdown: { "clean": int, "missing_mandatory_field": int,
-        "duplicate_merged": int, "flagged_internal": int } — ready to hand
-        straight to the frontend as the structured stats response
+        "duplicate_merged": int, "flagged_internal": int,
+        "suspicious_is_company_flag": int } — ready to hand straight to the
+        frontend as the structured stats response
     """
     mandatory = MANDATORY_FIELD[data_type]
     name_col = mandatory   # "Name" for customers, "Vendor Name" for vendors
     category_col = next((c for c in df.columns if c.lower() == "category"), None)
     address_col = next((c for c in df.columns if c.lower() == "street"), None)
+    contact_name_col = next((c for c in df.columns if c.lower() == "contacts / name"), None)
+    is_company_col = next((c for c in df.columns if c.lower() == "is a company"), None)
 
-    # Run the two advisory detectors once up front.
+    # Run the advisory detectors once up front.
     internal_flags = detect_internal_entries(df, name_col, category_col, client)
     duplicate_flags = detect_duplicates(df, name_col, address_col, client)
+    is_company_flags = detect_suspicious_is_company_flags(df, name_col, contact_name_col, is_company_col)
 
     errors: list[dict] = []
     error_positions: list[int] = []
@@ -2536,6 +2636,7 @@ def validate_and_split(
         "missing_mandatory_field": 0,
         "duplicate_merged": 0,
         "flagged_internal": 0,
+        "suspicious_is_company_flag": 0,
     }
 
     for pos, (_, row) in enumerate(df.iterrows()):
@@ -2559,6 +2660,11 @@ def validate_and_split(
             reason_code = "flagged_internal_entry"
             reason_text = internal_flags[pos]
 
+        # Priority 4: suspicious "Is a Company" flag
+        elif pos in is_company_flags:
+            reason_code = "suspicious_is_company_flag"
+            reason_text = is_company_flags[pos]
+
         if reason_code:
             err_row = row.to_dict()
             err_row["_reason_code"] = reason_code
@@ -2573,6 +2679,8 @@ def validate_and_split(
                 breakdown["duplicate_merged"] += 1
             elif reason_code == "flagged_internal_entry":
                 breakdown["flagged_internal"] += 1
+            elif reason_code == "suspicious_is_company_flag":
+                breakdown["suspicious_is_company_flag"] += 1
         else:
             breakdown["clean"] += 1
 
@@ -2586,7 +2694,7 @@ def validate_and_split(
 
 
 # ===========================================================================
-# 7d. OUTPUT WORKBOOK STYLING
+# 7e. OUTPUT WORKBOOK STYLING
 # ===========================================================================
 
 _HEADER_FILL = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
@@ -2756,6 +2864,10 @@ def process_file(
             message_parts.append(f"{breakdown['missing_mandatory_field']} missing required fields")
         if breakdown["flagged_internal"]:
             message_parts.append(f"{breakdown['flagged_internal']} flagged as internal entries")
+        if breakdown["suspicious_is_company_flag"]:
+            message_parts.append(
+                f"{breakdown['suspicious_is_company_flag']} with a suspicious 'Is a Company' value"
+            )
 
         return {
             "status": status,
@@ -2768,6 +2880,7 @@ def process_file(
                 "missing_mandatory_field": breakdown["missing_mandatory_field"],
                 "duplicate_merged": breakdown["duplicate_merged"],
                 "flagged_internal": breakdown["flagged_internal"],
+                "suspicious_is_company_flag": breakdown["suspicious_is_company_flag"],
             },
         }
 
@@ -2784,6 +2897,7 @@ def process_file(
                 "missing_mandatory_field": 0,
                 "duplicate_merged": 0,
                 "flagged_internal": 0,
+                "suspicious_is_company_flag": 0,
             },
         }
 
