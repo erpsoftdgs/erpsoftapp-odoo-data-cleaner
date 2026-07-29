@@ -37,6 +37,7 @@ function detectType(filename: string) {
 }
 
 type ConversionResult = {
+  id?: number;
   status: string;
   total: number;
   clean: number;
@@ -121,8 +122,10 @@ export default function HomeClient() {
       }
 
       // Stats ride along as headers since the response body is the raw
-      // file, not JSON — read them before consuming the body as a blob.
+      // file, not JSON, read them before consuming the body as a blob.
+      const convId = Number(response.headers.get('X-Conversion-ID')) || undefined;
       setResult({
+        id: convId,
         status: response.headers.get('X-Conversion-Status') || 'success',
         total: Number(response.headers.get('X-Rows-Total')) || 0,
         clean: Number(response.headers.get('X-Rows-Clean')) || 0,
@@ -174,7 +177,7 @@ export default function HomeClient() {
   return (
     <main className="min-h-screen bg-gradient-to-b from-slate-100 to-slate-200 flex items-center justify-center p-4 sm:p-6">
       <div className="max-w-2xl w-full bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200">
-        {/* Header — erpSOFTapp brand lockup */}
+        {/* Header erpSOFTapp brand lockup */}
         <div className="px-8 py-9 text-center bg-white border-b border-slate-100">
           <div className="inline-block">
             <div className="text-4xl font-extrabold tracking-tight leading-none">
@@ -306,7 +309,7 @@ export default function HomeClient() {
             <div className="mt-4 p-3 bg-green-50 text-green-800 rounded-lg flex items-center text-sm">
               <CheckCircle2 className="w-5 h-5 mr-2 flex-shrink-0" />
               <span>
-                Detected as <strong>{detected.label}</strong> data — good to go.
+                Detected as <strong>{detected.label}</strong> data is good to go.
               </span>
             </div>
           )}
@@ -353,13 +356,13 @@ export default function HomeClient() {
             </div>
           )}
 
-          {/* Conversion result — flags rows that need review instead of
+          {/* Conversion result, flags rows that need review instead of
               silently downloading a file that's missing them. */}
           {result && result.status === 'partial' && (
             <div className="mt-4 p-4 bg-amber-50 text-amber-800 rounded-lg flex items-start text-sm">
               <AlertCircle className="w-5 h-5 mr-3 flex-shrink-0" />
               <span>
-                Downloaded — but <strong>{result.errors}</strong> of {result.total} row
+                Downloaded but <strong>{result.errors}</strong> of {result.total} row
                 {result.total === 1 ? '' : 's'} need review
                 {breakdownPhrase(result) && <> ({breakdownPhrase(result)})</>}. They&apos;re
                 still in the file, highlighted in red on the <strong>Data</strong> sheet, with
@@ -371,7 +374,7 @@ export default function HomeClient() {
             <div className="mt-4 p-4 bg-green-50 text-green-700 rounded-lg flex items-start text-sm">
               <CheckCircle2 className="w-5 h-5 mr-3 flex-shrink-0" />
               <span>
-                Downloaded — all <strong>{result.total}</strong> rows cleaned successfully.
+                Downloaded all <strong>{result.total}</strong> rows cleaned successfully.
               </span>
             </div>
           )}
@@ -388,7 +391,7 @@ export default function HomeClient() {
             {loading ? (
               <>
                 <Loader2 className="w-6 h-6 mr-3 animate-spin" />
-                Cleaning with AI — this can take a minute…
+                Cleaning with AI, this can take a minute…
               </>
             ) : (
               <>
@@ -591,8 +594,22 @@ export default function HomeClient() {
                   </button>
                   <button
                     disabled={rating === 0}
-                    onClick={() => {
-                      setRatingSubmitted(true);
+                    onClick={async () => {
+                      try {
+                        await fetch(`${BASE_PATH}/api/rating`, {
+                          method: 'POST',
+                          headers: { 'Content-Type': 'application/json' },
+                          body: JSON.stringify({
+                            rating,
+                            feedback: ratingFeedback,
+                            conversionId: result?.id,
+                          }),
+                        });
+                      } catch (err) {
+                        console.error('Failed to submit rating:', err);
+                      } finally {
+                        setRatingSubmitted(true);
+                      }
                     }}
                     className={`px-5 py-2 text-xs font-semibold text-white rounded-lg transition-all shadow-sm ${rating === 0
                       ? 'bg-slate-200 cursor-not-allowed text-slate-400'

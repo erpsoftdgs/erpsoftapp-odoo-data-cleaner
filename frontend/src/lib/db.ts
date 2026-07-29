@@ -6,7 +6,7 @@ import fs from "fs";
 // built-in `node:sqlite` (no native module / build toolchain required).
 const DATA_DIR = path.join(process.cwd(), "data");
 
-// Persisted copies of cleaned files, named "{conversion_id}.xlsx" — see
+// Persisted copies of cleaned files, named "{conversion_id}.xlsx" see
 // api/clean/route.ts (write) and api/conversions/[id]/download (read).
 export const OUTPUT_DIR = path.join(DATA_DIR, "outputs");
 
@@ -16,17 +16,17 @@ function openDatabase(): DatabaseSync {
     fs.mkdirSync(OUTPUT_DIR, { recursive: true });
     return new DatabaseSync(path.join(DATA_DIR, "app.db"));
   } catch (error: unknown) {
-    // Next.js's build step ("Collecting page data") statically imports
-    // every route module — including this one, via verify-code/route.ts ->
-    // otp.ts -> db.ts — even though it never actually serves a request. If
-    // the persistent DB file is owned by a different user than whoever is
-    // running `next build` (the systemd service runs as www-data, but a
-    // human runs the build over SSH as themselves), that import-time touch
-    // fails with a permission error and takes the whole build down with
-    // it. Fall back to an in-memory DB so the module always loads cleanly —
-    // the real service process (which does have the right permissions)
-    // opens the real file normally, so this fallback never triggers when
-    // actually serving traffic.
+    /* Next.js's build step ("Collecting page data") statically imports
+       every route module including this one, via verify-code/route.ts ->
+       otp.ts -> db.ts even though it never actually serves a request. If
+       the persistent DB file is owned by a different user than whoever is
+       running `next build` (the systemd service runs as www-data, but a
+       human runs the build over SSH as themselves), that import-time touch
+       fails with a permission error and takes the whole build down with
+       it. Fall back to an in-memory DB so the module always loads cleanly
+       the real service process (which does have the right permissions)
+       opens the real file normally, so this fallback never triggers when
+      actually serving traffic. */
     console.warn("Could not open persistent database, falling back to in-memory:", error);
     return new DatabaseSync(":memory:");
   }
@@ -66,6 +66,17 @@ try {
     );
 
     CREATE INDEX IF NOT EXISTS idx_conversions_created_at ON conversions(created_at);
+
+    CREATE TABLE IF NOT EXISTS ratings (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      conversion_id INTEGER,
+      user_email TEXT NOT NULL,
+      rating INTEGER NOT NULL,
+      feedback TEXT,
+      created_at INTEGER NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_ratings_created_at ON ratings(created_at);
   `);
 
   // Runtime migration: CREATE TABLE IF NOT EXISTS doesn't alter an existing

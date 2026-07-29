@@ -149,6 +149,7 @@ export async function POST(request: Request) {
         // The response body is the raw file, so any status/row-count info
         // the browser needs has to ride along as headers instead of JSON —
         // read by HomeClient.tsx to show a "N rows need review" banner.
+        'X-Conversion-ID': String(lastInsertRowid),
         'X-Conversion-Status': String(cleanResult.status),
         'X-Rows-Total': String(stats.total ?? 0),
         'X-Rows-Clean': String(stats.clean ?? 0),
