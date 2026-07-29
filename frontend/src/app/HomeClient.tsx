@@ -62,6 +62,7 @@ export default function HomeClient() {
   const [hoverRating, setHoverRating] = useState(0);
   const [ratingFeedback, setRatingFeedback] = useState('');
   const [ratingSubmitted, setRatingSubmitted] = useState(false);
+  const [submittingRating, setSubmittingRating] = useState(false);
 
   // Floating Support Modal state
   const [showSupportModal, setShowSupportModal] = useState(false);
@@ -593,8 +594,10 @@ export default function HomeClient() {
                     Skip
                   </button>
                   <button
-                    disabled={rating === 0}
+                    disabled={rating === 0 || submittingRating || ratingSubmitted}
                     onClick={async () => {
+                      if (submittingRating || ratingSubmitted) return;
+                      setSubmittingRating(true);
                       try {
                         await fetch(`${BASE_PATH}/api/rating`, {
                           method: 'POST',
@@ -608,15 +611,17 @@ export default function HomeClient() {
                       } catch (err) {
                         console.error('Failed to submit rating:', err);
                       } finally {
+                        setSubmittingRating(false);
                         setRatingSubmitted(true);
                       }
                     }}
-                    className={`px-5 py-2 text-xs font-semibold text-white rounded-lg transition-all shadow-sm ${rating === 0
-                      ? 'bg-slate-200 cursor-not-allowed text-slate-400'
-                      : 'bg-amber-500 hover:bg-amber-600'
-                      }`}
+                    className={`px-5 py-2 text-xs font-semibold text-white rounded-lg transition-all shadow-sm ${
+                      rating === 0 || submittingRating || ratingSubmitted
+                        ? 'bg-slate-200 cursor-not-allowed text-slate-400'
+                        : 'bg-amber-500 hover:bg-amber-600'
+                    }`}
                   >
-                    Submit Rating
+                    {submittingRating ? 'Submitting…' : 'Submit Rating'}
                   </button>
                 </div>
               </div>
