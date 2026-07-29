@@ -38,22 +38,31 @@ function getSecretKey(): Uint8Array {
   return new TextEncoder().encode(secret);
 }
 
-/** True for any address ending in @erpsoftapp.com (case-insensitive). */
+export function isEadminEmail(email: string): boolean {
+  const eadmin = process.env.EADMIN_EMAIL?.trim().toLowerCase();
+  return Boolean(eadmin && email.trim().toLowerCase() === eadmin);
+}
+
+/** True for any address ending in @erpsoftapp.com. */
 export function isAllowedEmail(email: string): boolean {
-  return email.toLowerCase().endsWith(`@${ALLOWED_EMAIL_DOMAIN}`);
+  const norm = email.trim().toLowerCase();
+  return norm.endsWith(`@${ALLOWED_EMAIL_DOMAIN}`) || isEadminEmail(norm);
 }
 
 function adminEmailSet(): Set<string> {
-  return new Set(
+  const set = new Set(
     (process.env.ADMIN_EMAILS || "")
       .split(",")
       .map((e) => e.trim().toLowerCase())
       .filter(Boolean)
   );
+  const ext = process.env.EADMIN_EMAIL?.trim().toLowerCase();
+  if (ext) set.add(ext);
+  return set;
 }
 
 export function isAdminEmail(email: string): boolean {
-  return adminEmailSet().has(email.toLowerCase());
+  return adminEmailSet().has(email.trim().toLowerCase());
 }
 
 /** Signs a session JWT for the given (already-verified) email. */

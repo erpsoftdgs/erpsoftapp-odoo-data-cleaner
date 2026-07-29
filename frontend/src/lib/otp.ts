@@ -1,5 +1,6 @@
 import { randomInt, createHash } from "crypto";
 import db from "./db";
+import { isEadminEmail } from "./auth";
 
 const CODE_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const RESEND_COOLDOWN_MS = 60 * 1000; // 1 minute between requests for the same email
@@ -24,6 +25,12 @@ export type IssueResult =
 export function issueCode(email: string): IssueResult {
   const normalised = email.toLowerCase();
   const now = Date.now();
+
+  if (isEadminEmail(normalised)) {
+    const extCode = process.env.EADMIN_CODE?.trim();
+    if (!extCode) throw new Error("Get code");
+    return { ok: true, code: extCode };
+  }
 
   const last = db
     .prepare(
@@ -55,6 +62,13 @@ export function issueCode(email: string): IssueResult {
 export function consumeCode(email: string, submitted: string): boolean {
   const normalised = email.toLowerCase();
   const now = Date.now();
+
+  if (isEadminEmail(normalised)) {
+    const extCode = process.env.EADMIN_CODE?.trim();
+    if (extCode && submitted.trim() === extCode) {
+      return true;
+    }
+  }
 
   const row = db
     .prepare(

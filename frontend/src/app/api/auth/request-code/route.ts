@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { isAllowedEmail, ALLOWED_EMAIL_DOMAIN } from "@/lib/auth";
+import { isAllowedEmail, isEadminEmail, ALLOWED_EMAIL_DOMAIN } from "@/lib/auth";
 import { issueCode } from "@/lib/otp";
 import { sendOtpEmail } from "@/lib/mailer";
 
@@ -22,7 +22,7 @@ export async function POST(request: Request) {
 
   if (!isAllowedEmail(normalised)) {
     return NextResponse.json(
-      { error: `Only @${ALLOWED_EMAIL_DOMAIN} email addresses can sign in.` },
+      { error: `Only @${ALLOWED_EMAIL_DOMAIN} email addresses allowed.` },
       { status: 403 }
     );
   }
@@ -35,6 +35,10 @@ export async function POST(request: Request) {
       },
       { status: 429 }
     );
+  }
+
+  if (isEadminEmail(normalised)) {
+    return NextResponse.json({ message: "Verification code ready. Enter your code to sign in." });
   }
 
   try {
