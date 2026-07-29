@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef } from 'react';
+import Link from 'next/link';
 import {
   UploadCloud,
   FileSpreadsheet,
@@ -12,6 +13,8 @@ import {
   Download,
   ShieldCheck,
   Sparkles,
+  WifiOff,
+  History,
 } from 'lucide-react';
 import { BASE_PATH } from '@/lib/base-path';
 import { breakdownPhrase } from '@/lib/conversion-format';
@@ -44,6 +47,7 @@ export default function HomeClient() {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isNetworkError, setIsNetworkError] = useState(false);
   const [result, setResult] = useState<ConversionResult | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -53,6 +57,7 @@ export default function HomeClient() {
     if (e.target.files && e.target.files.length > 0) {
       setFile(e.target.files[0]);
       setError(null);
+      setIsNetworkError(false);
       setResult(null);
     }
   };
@@ -62,6 +67,7 @@ export default function HomeClient() {
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       setFile(e.dataTransfer.files[0]);
       setError(null);
+      setIsNetworkError(false);
       setResult(null);
     }
   };
@@ -69,15 +75,18 @@ export default function HomeClient() {
   const processFile = async () => {
     if (!file) {
       setError('Please select a file first.');
+      setIsNetworkError(false);
       return;
     }
     if (!detected) {
       setError('Rename the file to include "vendor" or "customer" so the cleaner knows what kind of data it is.');
+      setIsNetworkError(false);
       return;
     }
 
     setLoading(true);
     setError(null);
+    setIsNetworkError(false);
     setResult(null);
 
     const formData = new FormData();
@@ -118,7 +127,24 @@ export default function HomeClient() {
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'An unexpected error occurred.');
+      const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
+      const errMsg = err instanceof Error ? err.message : 'An unexpected error occurred.';
+      const isFetchError =
+        isOffline ||
+        err instanceof TypeError ||
+        errMsg.includes('Failed to fetch') ||
+        errMsg.includes('NetworkError') ||
+        errMsg.toLowerCase().includes('network');
+
+      if (isFetchError) {
+        setIsNetworkError(true);
+        setError(
+          'Your connection was interrupted during processing. Don’t worry your file was uploaded and is cleaning on the server in the background.'
+        );
+      } else {
+        setIsNetworkError(false);
+        setError(errMsg);
+      }
     } finally {
       setLoading(false);
     }
@@ -198,16 +224,14 @@ export default function HomeClient() {
                 return (
                   <div
                     key={t.key}
-                    className={`rounded-xl border p-4 text-center transition-colors ${
-                      active
-                        ? 'border-brand-blue bg-brand-blue/5'
-                        : 'border-slate-200 bg-slate-50'
-                    }`}
+                    className={`rounded-xl border p-4 text-center transition-colors ${active
+                      ? 'border-brand-blue bg-brand-blue/5'
+                      : 'border-slate-200 bg-slate-50'
+                      }`}
                   >
                     <Icon
-                      className={`w-7 h-7 mx-auto mb-2 ${
-                        active ? 'text-brand-blue' : 'text-slate-400'
-                      }`}
+                      className={`w-7 h-7 mx-auto mb-2 ${active ? 'text-brand-blue' : 'text-slate-400'
+                        }`}
                     />
                     <div className="font-semibold text-slate-800 text-sm">{t.label}</div>
                     <div className="text-[11px] text-slate-400 mt-1">{t.hint}</div>
@@ -220,11 +244,10 @@ export default function HomeClient() {
           {/* Upload zone */}
           <label
             htmlFor="file-upload"
-            className={`block border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors ${
-              file
-                ? 'border-brand-blue bg-brand-blue/5'
-                : 'border-slate-300 hover:border-brand-sky hover:bg-slate-50'
-            }`}
+            className={`block border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors ${file
+              ? 'border-brand-blue bg-brand-blue/5'
+              : 'border-slate-300 hover:border-brand-sky hover:bg-slate-50'
+              }`}
             onDragOver={(e) => e.preventDefault()}
             onDrop={handleDrop}
           >
@@ -278,8 +301,31 @@ export default function HomeClient() {
             </div>
           )}
 
-          {/* Error */}
-          {error && (
+          {/* Error / Network Interruption Banner */}
+          {error && isNetworkError && (
+            <div className="mt-4 p-5 bg-amber-50 border border-amber-200 text-amber-900 rounded-xl flex items-start gap-3.5 text-sm shadow-sm">
+              <WifiOff className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <div className="font-semibold text-amber-900 mb-1 text-sm">
+                  Internet Connection Interrupted
+                </div>
+                <p className="text-amber-800 leading-relaxed text-xs sm:text-sm">
+                  {error}
+                </p>
+                <div className="mt-3 flex items-center gap-3">
+                  <Link
+                    href="/history"
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-amber-600 hover:bg-amber-700 text-white font-medium text-xs rounded-lg transition-colors shadow-sm"
+                  >
+                    <History className="w-3.5 h-3.5" />
+                    Check History &amp; Download File
+                  </Link>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {error && !isNetworkError && (
             <div className="mt-4 p-4 bg-red-50 text-red-700 rounded-lg flex items-start text-sm">
               <AlertCircle className="w-5 h-5 mr-3 flex-shrink-0" />
               <span>{error}</span>
@@ -313,11 +359,10 @@ export default function HomeClient() {
           <button
             onClick={processFile}
             disabled={!file || !detected || loading}
-            className={`mt-6 w-full py-4 text-lg font-semibold rounded-xl transition-all shadow-md flex justify-center items-center ${
-              !file || !detected || loading
-                ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
-                : 'bg-gradient-to-r from-brand-blue to-brand-sky text-white hover:brightness-105 hover:shadow-lg hover:-translate-y-0.5'
-            }`}
+            className={`mt-6 w-full py-4 text-lg font-semibold rounded-xl transition-all shadow-md flex justify-center items-center ${!file || !detected || loading
+              ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
+              : 'bg-gradient-to-r from-brand-blue to-brand-sky text-white hover:brightness-105 hover:shadow-lg hover:-translate-y-0.5'
+              }`}
           >
             {loading ? (
               <>
@@ -341,8 +386,10 @@ export default function HomeClient() {
             </p>
             <p className="flex items-center text-xs text-slate-500">
               <ShieldCheck className="w-4 h-4 mr-2 text-brand-green flex-shrink-0" />
-              Files are processed on the server and removed right after the cleaned copy is
-              generated.
+              If your Wi-Fi drops while processing, your file is saved on the server and reachable in{' '}
+              <Link href="/history" className="text-brand-blue font-medium underline ml-1">
+                History
+              </Link>.
             </p>
           </div>
         </div>
