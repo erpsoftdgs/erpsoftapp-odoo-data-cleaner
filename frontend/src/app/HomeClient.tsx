@@ -15,6 +15,10 @@ import {
   Sparkles,
   WifiOff,
   History,
+  Star,
+  X,
+  LifeBuoy,
+  Send,
 } from 'lucide-react';
 import { BASE_PATH } from '@/lib/base-path';
 import { breakdownPhrase } from '@/lib/conversion-format';
@@ -50,6 +54,18 @@ export default function HomeClient() {
   const [isNetworkError, setIsNetworkError] = useState(false);
   const [result, setResult] = useState<ConversionResult | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Rate Me Popup state
+  const [showRatingModal, setShowRatingModal] = useState(false);
+  const [rating, setRating] = useState(0);
+  const [hoverRating, setHoverRating] = useState(0);
+  const [ratingFeedback, setRatingFeedback] = useState('');
+  const [ratingSubmitted, setRatingSubmitted] = useState(false);
+
+  // Floating Support Modal state
+  const [showSupportModal, setShowSupportModal] = useState(false);
+  const [supportSubject, setSupportSubject] = useState('');
+  const [supportMessage, setSupportMessage] = useState('');
 
   const detected = file ? detectType(file.name) : null;
 
@@ -126,6 +142,11 @@ export default function HomeClient() {
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
+
+      // Trigger Rate Me popup short delay after download completes
+      setTimeout(() => {
+        setShowRatingModal(true);
+      }, 700);
     } catch (err: unknown) {
       const isOffline = typeof navigator !== 'undefined' && !navigator.onLine;
       const errMsg = err instanceof Error ? err.message : 'An unexpected error occurred.';
@@ -198,7 +219,7 @@ export default function HomeClient() {
             </h2>
             <ol className="space-y-3">
               {[
-                'Name your file so it contains "vendor" or "customer" — this tells the cleaner what kind of data it is.',
+                'Name your file so it contains "vendor" or "customer" this tells the cleaner what kind of data it is.',
                 'Upload the spreadsheet below (.xlsx, .xls, or .ods). Columns can be messy or in any order.',
                 'Click "Clean & Download". The AI maps, normalises, and formats your data, then a cleaned .xlsx downloads automatically.',
               ].map((step, i) => (
@@ -274,7 +295,7 @@ export default function HomeClient() {
                   Click to upload or drag &amp; drop
                 </span>
                 <span className="text-sm text-slate-400 mt-2">
-                  Excel or OpenDocument — .xlsx, .xls, .ods
+                  Excel or OpenDocument .xlsx, .xls, .ods
                 </span>
               </div>
             )}
@@ -381,7 +402,7 @@ export default function HomeClient() {
           <div className="mt-6 pt-5 border-t border-slate-100 space-y-2">
             <p className="flex items-center text-xs text-slate-500">
               <Sparkles className="w-4 h-4 mr-2 text-brand-sky flex-shrink-0" />
-              The AI cleans column names, splits addresses, and classifies records — your
+              The AI cleans column names, splits addresses, and classifies records your
               source columns don&apos;t need to be perfect.
             </p>
             <p className="flex items-center text-xs text-slate-500">
@@ -394,6 +415,198 @@ export default function HomeClient() {
           </div>
         </div>
       </div>
+
+      {/* Floating Support Button */}
+      <button
+        onClick={() => setShowSupportModal(true)}
+        className="fixed bottom-6 right-6 z-40 bg-brand-blue hover:bg-slate-800 text-white font-medium px-4 py-3 rounded-full shadow-xl flex items-center gap-2.5 transition-all animate-bounce hover:scale-105 active:scale-95 border border-white/20"
+        title="Need help? Contact support"
+      >
+        <LifeBuoy className="w-5 h-5 text-brand-sky" />
+        <span className="text-sm font-semibold">Support</span>
+      </button>
+
+      {/* Support Modal */}
+      {showSupportModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 relative">
+            <button
+              onClick={() => setShowSupportModal(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors p-1"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-full bg-brand-blue/10 flex items-center justify-center text-brand-blue">
+                <LifeBuoy className="w-5 h-5 text-brand-blue" />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-slate-800">Contact Support</h3>
+                <p className="text-xs text-slate-500">Send an email directly to our support team</p>
+              </div>
+            </div>
+
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                const subject = encodeURIComponent(supportSubject || 'Support Request - Data Cleaner');
+                const body = encodeURIComponent(supportMessage);
+                window.location.href = `mailto:eniola@erpsoftapp.com?cc=johnnoah620@gmail.com&subject=${subject}&body=${body}`;
+                setShowSupportModal(false);
+                setSupportSubject('');
+                setSupportMessage('');
+              }}
+              className="space-y-4"
+            >
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Subject</label>
+                <input
+                  type="text"
+                  value={supportSubject}
+                  onChange={(e) => setSupportSubject(e.target.value)}
+                  placeholder="e.g. Need assistance with spreadsheet import"
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-blue/30 focus:border-brand-blue"
+                  required
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Message</label>
+                <textarea
+                  rows={4}
+                  value={supportMessage}
+                  onChange={(e) => setSupportMessage(e.target.value)}
+                  placeholder="Describe your issue or question..."
+                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-blue/30 focus:border-brand-blue resize-none"
+                  required
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowSupportModal(false)}
+                  className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 text-xs font-semibold text-white bg-brand-blue hover:bg-brand-blue/90 rounded-lg shadow transition-all flex items-center gap-1.5"
+                >
+                  <Send className="w-3.5 h-3.5" />
+                  Send Email
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Rate Me Modal */}
+      {showRatingModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 relative text-center">
+            <button
+              onClick={() => {
+                setShowRatingModal(false);
+                setRatingSubmitted(false);
+                setRating(0);
+              }}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors p-1"
+            >
+              <X className="w-5 h-5" />
+            </button>
+
+            {ratingSubmitted ? (
+              <div className="py-6">
+                <div className="w-14 h-14 mx-auto rounded-full bg-green-100 text-green-600 flex items-center justify-center mb-3">
+                  <CheckCircle2 className="w-8 h-8" />
+                </div>
+                <h3 className="text-xl font-bold text-slate-800">Thank You!</h3>
+                <p className="text-xs text-slate-500 mt-1.5 max-w-xs mx-auto">
+                  Your feedback helps us continuously improve the erpSOFTapp Data Cleaner.
+                </p>
+                <button
+                  onClick={() => {
+                    setShowRatingModal(false);
+                    setRatingSubmitted(false);
+                    setRating(0);
+                  }}
+                  className="mt-5 px-6 py-2 bg-brand-blue text-white text-xs font-semibold rounded-lg hover:bg-brand-blue/90 transition-colors shadow-sm"
+                >
+                  Done
+                </button>
+              </div>
+            ) : (
+              <div>
+                <div className="w-12 h-12 mx-auto rounded-full bg-amber-100 text-amber-500 flex items-center justify-center mb-3">
+                  <Star className="w-6 h-6 fill-amber-400" />
+                </div>
+                <h3 className="text-xl font-bold text-slate-800">How was your session?</h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  Rate your data cleaning experience to help us improve.
+                </p>
+
+                {/* Star Rating Controls */}
+                <div className="flex justify-center gap-2 my-5">
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <button
+                      key={star}
+                      type="button"
+                      onMouseEnter={() => setHoverRating(star)}
+                      onMouseLeave={() => setHoverRating(0)}
+                      onClick={() => setRating(star)}
+                      className="p-1 transition-transform hover:scale-125 focus:outline-none"
+                    >
+                      <Star
+                        className={`w-8 h-8 transition-colors ${star <= (hoverRating || rating)
+                          ? 'text-amber-400 fill-amber-400'
+                          : 'text-slate-300'
+                          }`}
+                      />
+                    </button>
+                  ))}
+                </div>
+
+                {/* Optional Feedback Textarea */}
+                <textarea
+                  rows={3}
+                  value={ratingFeedback}
+                  onChange={(e) => setRatingFeedback(e.target.value)}
+                  placeholder="Tell us what went well or how we can improve (optional)…"
+                  className="w-full p-3 text-xs border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-amber-400/40 resize-none text-slate-700 mb-4"
+                />
+
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    onClick={() => {
+                      setShowRatingModal(false);
+                      setRating(0);
+                    }}
+                    className="px-4 py-2 text-xs font-medium text-slate-500 hover:bg-slate-100 rounded-lg transition-colors"
+                  >
+                    Skip
+                  </button>
+                  <button
+                    disabled={rating === 0}
+                    onClick={() => {
+                      setRatingSubmitted(true);
+                    }}
+                    className={`px-5 py-2 text-xs font-semibold text-white rounded-lg transition-all shadow-sm ${rating === 0
+                      ? 'bg-slate-200 cursor-not-allowed text-slate-400'
+                      : 'bg-amber-500 hover:bg-amber-600'
+                      }`}
+                  >
+                    Submit Rating
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </main>
   );
 }
