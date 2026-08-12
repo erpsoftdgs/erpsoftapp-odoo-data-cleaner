@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import { Agent, fetch as undiciFetch, FormData as UndiciFormData } from 'undici';
 import { getSession } from '@/lib/auth';
 import db, { OUTPUT_DIR } from '@/lib/db';
@@ -49,8 +50,11 @@ export async function POST(request: Request) {
     // Forward the upload to the engine's /api/clean-data endpoint. Built with
     // undici's own FormData (not the global one) so its type matches what
     // undiciFetch's body expects.
+    const uploadBuffer = Buffer.from(await file.arrayBuffer());
+    const fileHash = crypto.createHash('sha256').update(uploadBuffer).digest('hex');
+
     const engineForm = new UndiciFormData();
-    engineForm.append('file', new Blob([await file.arrayBuffer()], { type: file.type }), file.name);
+    engineForm.append('file', new Blob([uploadBuffer], { type: file.type }), file.name);
     engineForm.append('data_type', dataType);
 
     const startedAt = Date.now();
@@ -110,8 +114,8 @@ export async function POST(request: Request) {
       `INSERT INTO conversions
          (user_email, data_type, filename, rows_uploaded, rows_cleaned, rows_errors,
           rows_missing_fields, rows_duplicates, rows_internal, rows_is_company_flag,
-          conversion_ms, status, created_at, downloaded_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          conversion_ms, status, file_hash, created_at, downloaded_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       session.email,
       dataType,
@@ -125,6 +129,7 @@ export async function POST(request: Request) {
       Number(stats.suspicious_is_company_flag) || 0,
       finishedAt - startedAt,
       String(cleanResult.status),
+      fileHash,
       finishedAt,
       finishedAt
     );

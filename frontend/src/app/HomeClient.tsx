@@ -56,6 +56,9 @@ export default function HomeClient() {
   const [result, setResult] = useState<ConversionResult | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Duplicate Warning Modal state
+  const [duplicateWarning, setDuplicateWarning] = useState<{ show: boolean; email: string; fileHash: string } | null>(null);
+
   // Rate Me Popup state
   const [showRatingModal, setShowRatingModal] = useState(false);
   const [rating, setRating] = useState(0);
@@ -90,7 +93,7 @@ export default function HomeClient() {
     }
   };
 
-  const processFile = async () => {
+  const processFile = async (forceBypassDuplicateCheck = false) => {
     if (!file) {
       setError('Please select a file first.');
       setIsNetworkError(false);
@@ -106,6 +109,27 @@ export default function HomeClient() {
     setError(null);
     setIsNetworkError(false);
     setResult(null);
+
+    if (!forceBypassDuplicateCheck) {
+      try {
+        const arrayBuffer = await file.arrayBuffer();
+        const hashBuffer = await crypto.subtle.digest('SHA-256', arrayBuffer);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        const fileHash = hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+
+        const checkRes = await fetch(`${BASE_PATH}/api/check-duplicate?hash=${fileHash}`);
+        if (checkRes.ok) {
+          const checkData = await checkRes.json();
+          if (checkData.duplicate) {
+            setDuplicateWarning({ show: true, email: checkData.cleaned_by, fileHash });
+            setLoading(false);
+            return;
+          }
+        }
+      } catch (err) {
+        console.error('Failed to check for duplicate:', err);
+      }
+    }
 
     const formData = new FormData();
     formData.append('file', file);
@@ -382,7 +406,7 @@ export default function HomeClient() {
 
           {/* Action */}
           <button
-            onClick={processFile}
+            onClick={() => processFile(false)}
             disabled={!file || !detected || loading}
             className={`mt-6 w-full py-4 text-lg font-semibold rounded-xl transition-all shadow-md flex justify-center items-center ${!file || !detected || loading
               ? 'bg-slate-200 text-slate-400 cursor-not-allowed shadow-none'
@@ -456,7 +480,7 @@ export default function HomeClient() {
                 e.preventDefault();
                 const subject = encodeURIComponent(supportSubject || 'Support Request - Data Cleaner');
                 const body = encodeURIComponent(supportMessage);
-                window.location.href = `mailto:eniola@erpsoftapp.com?cc=johnnoah620@gmail.com&subject=${subject}&body=${body}`;
+                window.location.href = `mailto:services@erpsoftapp.com?subject=${subject}&body=${body}`;
                 setShowSupportModal(false);
                 setSupportSubject('');
                 setSupportMessage('');
@@ -615,17 +639,56 @@ export default function HomeClient() {
                         setRatingSubmitted(true);
                       }
                     }}
-                    className={`px-5 py-2 text-xs font-semibold text-white rounded-lg transition-all shadow-sm ${
-                      rating === 0 || submittingRating || ratingSubmitted
-                        ? 'bg-slate-200 cursor-not-allowed text-slate-400'
-                        : 'bg-amber-500 hover:bg-amber-600'
-                    }`}
+                    className={`px-5 py-2 text-xs font-semibold text-white rounded-lg transition-all shadow-sm ${rating === 0 || submittingRating || ratingSubmitted
+                      ? 'bg-slate-200 cursor-not-allowed text-slate-400'
+                      : 'bg-amber-500 hover:bg-amber-600'
+                      }`}
                   >
                     {submittingRating ? 'Submitting…' : 'Submit Rating'}
                   </button>
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Duplicate Warning Modal */}
+      {duplicateWarning?.show && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 relative text-center">
+            <button
+              onClick={() => setDuplicateWarning(null)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 transition-colors p-1"
+            >
+              <X className="w-5 h-5" />
+            </button>
+            <div className="w-12 h-12 mx-auto rounded-full bg-amber-100 text-amber-500 flex items-center justify-center mb-3">
+              <AlertCircle className="w-6 h-6" />
+            </div>
+            <h3 className="text-xl font-bold text-slate-800">Already Cleaned</h3>
+            <p className="text-sm text-slate-600 mt-2 mb-6">
+              This file has been cleaned before by <strong className="text-slate-800">{duplicateWarning.email}, Please confirm</strong>.
+              <br />
+              Are you sure you want to clean it again?
+            </p>
+            <div className="flex justify-center gap-3">
+              <button
+                onClick={() => setDuplicateWarning(null)}
+                className="px-5 py-2.5 text-sm font-medium text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setDuplicateWarning(null);
+                  processFile(true);
+                }}
+                className="px-5 py-2.5 text-sm font-semibold text-white bg-brand-blue hover:bg-brand-sky rounded-xl transition-colors shadow-sm flex items-center gap-2"
+              >
+                Yes, Clean Anyway
+              </button>
+            </div>
           </div>
         </div>
       )}

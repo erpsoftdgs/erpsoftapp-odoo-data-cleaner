@@ -61,6 +61,7 @@ try {
       rows_is_company_flag INTEGER NOT NULL DEFAULT 0,
       conversion_ms INTEGER NOT NULL,
       status TEXT NOT NULL,
+      file_hash TEXT,
       created_at INTEGER NOT NULL,
       downloaded_at INTEGER NOT NULL
     );
@@ -87,6 +88,10 @@ try {
 
   if (!hasConversionColumn("output_filename")) {
     db.exec("ALTER TABLE conversions ADD COLUMN output_filename TEXT");
+  }
+
+  if (!hasConversionColumn("file_hash")) {
+    db.exec("ALTER TABLE conversions ADD COLUMN file_hash TEXT");
   }
 
   // rows_errors is the total flagged count; these four subdivide it by reason
