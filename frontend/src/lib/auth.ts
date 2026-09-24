@@ -4,8 +4,8 @@ import { cookies } from "next/headers";
 export const SESSION_COOKIE = "session";
 export const ALLOWED_EMAIL_DOMAIN = "erpsoftapp.com";
 
-// Sliding 1-hour inactivity window: each authenticated request re-signs the
-// token with a fresh expiry (see middleware.ts), so the session only dies
+// Sliding 1-hour inactivity window: proxy.ts re-signs the token on each
+// authenticated request, so the session only dies
 // after an hour with no activity rather than at a fixed time from login.
 export const SESSION_TTL_SECONDS = 60 * 60; // 1 hour
 

@@ -48,6 +48,32 @@ type ConversionResult = {
   isCompanyFlag: number;
 };
 
+async function getResponseErrorMessage(response: Response): Promise<string> {
+  if (response.redirected && new URL(response.url).pathname.endsWith("/login")) {
+    return "Your session has expired. Please sign in again.";
+  }
+
+  const body = await response.text();
+  try {
+    const payload = JSON.parse(body) as {
+      error?: unknown;
+      detail?: unknown;
+      message?: unknown;
+    };
+    for (const value of [payload.error, payload.detail, payload.message]) {
+      if (typeof value === "string" && value.trim()) return value;
+    }
+  } catch {
+    // A proxy or hosting layer can return HTML or plain text instead of JSON.
+  }
+
+  const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
+  if (body.trim() && !contentType.includes("text/html") && body.length < 300) {
+    return body.trim();
+  }
+  return `The server returned an unexpected response (HTTP ${response.status}). Please try again.`;
+}
+
 export default function HomeClient() {
   const [file, setFile] = useState<File | null>(null);
   const [loading, setLoading] = useState(false);
@@ -142,8 +168,16 @@ export default function HomeClient() {
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to process file');
+        throw new Error(await getResponseErrorMessage(response));
+      }
+
+      const contentType = response.headers.get('content-type')?.toLowerCase() || '';
+      if (
+        response.redirected ||
+        contentType.includes('text/html') ||
+        contentType.includes('application/json')
+      ) {
+        throw new Error(await getResponseErrorMessage(response));
       }
 
       // Stats ride along as headers since the response body is the raw
