@@ -18,12 +18,32 @@ from pathlib import Path
 from typing import Any
 
 import anthropic
-import os
 import pandas as pd
 import urllib.error
 import urllib.request
 from openpyxl.styles import PatternFill, Font
 from openpyxl.utils import get_column_letter
+
+if __package__:
+    from .config import (
+        ANTHROPIC_MAX_RETRIES,
+        ANTHROPIC_RATE_LIMIT_RPM,
+        GEMINI_API_KEY,
+        GEMINI_MODEL,
+        GEMINI_RATE_LIMIT_RPM,
+        OPENROUTER_API_KEY,
+        OPENROUTER_MODEL,
+    )
+else:
+    from config import (
+        ANTHROPIC_MAX_RETRIES,
+        ANTHROPIC_RATE_LIMIT_RPM,
+        GEMINI_API_KEY,
+        GEMINI_MODEL,
+        GEMINI_RATE_LIMIT_RPM,
+        OPENROUTER_API_KEY,
+        OPENROUTER_MODEL,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -55,7 +75,7 @@ CUSTOMER_SCHEMA: dict[str, dict] = {
     "Zip":                        {"required": False, "default": None, "dtype": "str"},
     "Country":                    {"required": False, "default": None, "dtype": "str"},
     "Website":                    {"required": False, "default": None, "dtype": "str"},
-    "Is a Company":               {"required": False, "default": True,  "dtype": "bool"},
+    "Is a Company":               {"required": False, "default": False, "dtype": "bool"},
     "Reference":                  {"required": False, "default": None, "dtype": "str"},
     "Credit Limit":               {"required": False, "default": 0,    "dtype": "float"},
     "Branch":                     {"required": False, "default": None, "dtype": "str"},
@@ -87,7 +107,6 @@ VENDOR_SCHEMA: dict[str, dict] = {
     "Mobile":                     {"required": False, "default": None, "dtype": "str"},
     "Email":                      {"required": False, "default": None, "dtype": "str"},
     "Website":                    {"required": False, "default": None, "dtype": "str"},
-    "Is a Company":               {"required": False, "default": True,  "dtype": "bool"},
     "Reference":                  {"required": False, "default": None, "dtype": "str"},
     "Supplier Rank":              {"required": False, "default": 1,    "dtype": "int"},
     "Address Type":               {"required": False, "default": None, "dtype": "str"},
@@ -443,17 +462,13 @@ def _reshape_block(df: pd.DataFrame, rp: dict) -> pd.DataFrame:
 # Without OPENROUTER_API_KEY set, the fallback is a no-op and behaviour is
 # identical to before (Anthropic-only, with backoff/retry).
 
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
-OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # Gemini sits between Claude and OpenRouter: better quality than OpenRouter's
 # free models, and (on the free Gemini tier) gemini-3.1-flash-lite gives a
 # much higher daily quota (500 RPD) than e.g. gemini-2.5-flash (20 RPD) — see
 # https://ai.dev/rate-limit for current per-model limits on your key.
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL   = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
-GEMINI_URL     = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
 
 # How many times the Anthropic SDK retries a 429 internally before giving up
 # and letting _complete_with_fallback() switch to the fallback chain. Claude's
@@ -461,7 +476,6 @@ GEMINI_URL     = "https://generativelanguage.googleapis.com/v1beta/models/{model
 # retries first rather than dropping down on the very first rate-limit
 # response — but capped, so a sustained rate limit still fails over instead
 # of retrying forever.
-ANTHROPIC_MAX_RETRIES = int(os.getenv("ANTHROPIC_MAX_RETRIES", "3"))
 
 # Per-provider request pacing. RATE_LIMIT_RPM previously existed in .env but
 # was never actually read anywhere — every call fired as fast as the loop
@@ -470,8 +484,6 @@ ANTHROPIC_MAX_RETRIES = int(os.getenv("ANTHROPIC_MAX_RETRIES", "3"))
 # tier is ~5 RPM; gemini-3.1-flash-lite's free tier is 15 RPM), so pacing them
 # all to one shared rate would throttle a faster fallback down to the
 # slowest provider's pace. Each gets its own independent minimum interval.
-ANTHROPIC_RATE_LIMIT_RPM = float(os.getenv("RATE_LIMIT_RPM") or 5)
-GEMINI_RATE_LIMIT_RPM    = float(os.getenv("GEMINI_RATE_LIMIT_RPM") or 15)
 
 _last_call_at: dict[str, float] = {}
 
@@ -940,7 +952,7 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
     # --- Is a Company: INFER from name when column is absent ---
     # This handles files like FZR raw data that have no Is a Company column.
     # We look for the name column and derive the boolean from the name value.
-    if not company_cols:
+    if data_type == "customer" and not company_cols:
         name_col = next(
             (c for c in df.columns if c.lower() in ("name", "vendor name", "description")),
             None
@@ -1108,11 +1120,13 @@ def _clean_email(val: Any) -> Any:
 def _coerce_bool(val: Any) -> bool:
     if isinstance(val, bool):
         return val
+    if pd.isna(val):
+        return False
     if isinstance(val, (int, float)):
         return bool(val)
     if isinstance(val, str):
         return val.strip().lower() in ("true", "1", "yes", "y")
-    return True
+    return False
 
 
 # Corporate keywords that strongly indicate a business entity
@@ -1147,48 +1161,16 @@ _INTERNAL_ACCOUNT_PATTERNS = re.compile(
 
 def infer_is_company(name: Any) -> bool:
     """
-    Infer whether a name represents a company or an individual.
+    Infer company status from the name when the source has no company flag.
 
-    Logic (mirrors what your BAs do manually):
-    1. If name contains known corporate suffix/keyword → True
-    2. If name matches internal account patterns → False
-    3. If name is a single word (no spaces) and short → likely individual → False
-    4. If name looks like "Firstname Lastname" (2 words, both capitalised,
-       no corporate keywords) → False
-    5. Default → True (when in doubt, treat as company)
+    The conversion rule is intentionally conservative: only an explicit
+    "Ltd" "PLC" "IT" "LP" & "Co" marker identifies a company. All other names default to
+    False so individual customers are not incorrectly marked as companies.
     """
     if not isinstance(name, str) or not name.strip():
-        return True
-
-    name_clean = name.strip()
-    name_lower = name_clean.lower()
-    words = name_clean.split()
-
-    # Rule 1: corporate keyword anywhere in the name → Company
-    name_tokens = set(re.split(r"[\s,.\-\/&()]+", name_lower))
-    if name_tokens & _COMPANY_KEYWORDS:
-        return True
-
-    # Rule 2: internal account patterns → Individual / non-company
-    if _INTERNAL_ACCOUNT_PATTERNS.search(name_lower):
         return False
 
-    # Rule 3: single word (e.g. "Adaora", "Chioma", "George") → Individual
-    if len(words) == 1:
-        return False
-
-    # Rule 4: exactly 2–3 words, all look like personal names
-    # (each word is alphabetic, title-cased, no corporate keyword)
-    if len(words) <= 3:
-        looks_personal = all(
-            re.fullmatch(r"[A-Za-z'\-]+", w) and len(w) >= 2
-            for w in words
-        )
-        if looks_personal:
-            return False
-
-    # Rule 5: default → treat as company
-    return True
+    return bool(re.search(r"\b(?:ltd|plc|it|lp|co)\b", name.strip(), re.IGNORECASE))
 
 
 # ---------------------------------------------------------------------------
@@ -2804,6 +2786,28 @@ def process_file(
         )
         logger.info("Column mapping: %s", json.dumps(mapping, indent=2))
         logger.info("Quality flags: %s", json.dumps(flags, indent=2))
+
+        mapped_source_columns = [
+            source_col
+            for source_col, target_field in mapping.items()
+            if target_field in schema and source_col in df_raw.columns
+        ]
+        if not mapped_source_columns:
+            raise RuntimeError(
+                "AI column mapping did not map any source column to the selected Odoo schema. "
+                "No cleaned workbook was generated. Check the AI provider/API key and source columns."
+            )
+
+        has_mapped_source_data = any(
+            pd.notna(value) and not (isinstance(value, str) and not value.strip())
+            for source_col in mapped_source_columns
+            for value in df_raw[source_col]
+        )
+        if not has_mapped_source_data:
+            raise RuntimeError(
+                "All source values mapped to Odoo fields are empty. "
+                "No cleaned workbook was generated."
+            )
 
         # 4. Rule-based Pandas cleaning (pre-rename for phone/email/name heuristics)
         df_clean = rule_based_clean(df_raw.copy(), data_type)

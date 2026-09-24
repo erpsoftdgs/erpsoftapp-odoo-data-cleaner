@@ -8,21 +8,33 @@ Run:  uvicorn api_server:app --reload --port 8000
 
 from __future__ import annotations
 
-import os
+import logging
 import shutil
 import uuid
 from pathlib import Path
 
-from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
-# Searches from this file upward, so the project-root .env (one level up
-# from engine/) is picked up regardless of the process's working directory.
-load_dotenv()
+if __package__:
+    from .config import (
+        ANTHROPIC_API_KEY,
+        ANTHROPIC_API_KEY_SOURCE,
+        ENV_FILE_PATH,
+        OPENROUTER_API_KEY,
+    )
+    from .odoo_data_engine import process_file
+else:
+    from config import (
+        ANTHROPIC_API_KEY,
+        ANTHROPIC_API_KEY_SOURCE,
+        ENV_FILE_PATH,
+        OPENROUTER_API_KEY,
+    )
+    from odoo_data_engine import process_file
 
-from odoo_data_engine import process_file
+logger = logging.getLogger("api_server")
 
 # ---------------------------------------------------------------------------
 # App setup
@@ -45,8 +57,13 @@ OUTPUT_DIR = Path("tmp/outputs")
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+logger.info(
+    "Environment file: %s (exists=%s); Anthropic key source: %s (configured=%s)",
+    ENV_FILE_PATH,
+    ENV_FILE_PATH.is_file(),
+    ANTHROPIC_API_KEY_SOURCE,
+    bool(ANTHROPIC_API_KEY),
+)
 
 
 # ---------------------------------------------------------------------------
