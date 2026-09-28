@@ -18,12 +18,32 @@ from pathlib import Path
 from typing import Any
 
 import anthropic
-import os
 import pandas as pd
 import urllib.error
 import urllib.request
 from openpyxl.styles import PatternFill, Font
 from openpyxl.utils import get_column_letter
+
+if __package__:
+    from .config import (
+        ANTHROPIC_MAX_RETRIES,
+        ANTHROPIC_RATE_LIMIT_RPM,
+        GEMINI_API_KEY,
+        GEMINI_MODEL,
+        GEMINI_RATE_LIMIT_RPM,
+        OPENROUTER_API_KEY,
+        OPENROUTER_MODEL,
+    )
+else:
+    from config import (
+        ANTHROPIC_MAX_RETRIES,
+        ANTHROPIC_RATE_LIMIT_RPM,
+        GEMINI_API_KEY,
+        GEMINI_MODEL,
+        GEMINI_RATE_LIMIT_RPM,
+        OPENROUTER_API_KEY,
+        OPENROUTER_MODEL,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -43,61 +63,60 @@ logger = logging.getLogger("odoo_engine")
 # ===========================================================================
 
 CUSTOMER_SCHEMA: dict[str, dict] = {
-    "Name":                       {"required": True,  "default": None, "dtype": "str"},
-    "Job Position":               {"required": False, "default": None, "dtype": "str"},
-    "Mobile":                     {"required": False, "default": None, "dtype": "str"},
-    "Phone":                      {"required": False, "default": None, "dtype": "str"},
-    "Email":                      {"required": False, "default": None, "dtype": "str"},
-    "Street":                     {"required": False, "default": None, "dtype": "str"},
-    "Street2":                    {"required": False, "default": None, "dtype": "str"},
-    "City":                       {"required": False, "default": None, "dtype": "str"},
-    "State":                      {"required": False, "default": None, "dtype": "str"},
-    "Zip":                        {"required": False, "default": None, "dtype": "str"},
-    "Country":                    {"required": False, "default": None, "dtype": "str"},
-    "Website":                    {"required": False, "default": None, "dtype": "str"},
-    "Is a Company":               {"required": False, "default": True,  "dtype": "bool"},
-    "Reference":                  {"required": False, "default": None, "dtype": "str"},
-    "Credit Limit":               {"required": False, "default": 0,    "dtype": "float"},
-    "Branch":                     {"required": False, "default": None, "dtype": "str"},
-    "Customer Rank":              {"required": False, "default": 1,    "dtype": "int"},
-    "Salesperson":                {"required": False, "default": None, "dtype": "str"},
-    "Category":                   {"required": False, "default": None, "dtype": "str"},
-    "Sub Category":               {"required": False, "default": None, "dtype": "str"},
-    "Note":                       {"required": False, "default": None, "dtype": "str"},
-    "Account Receivable":         {"required": False, "default": None, "dtype": "str"},
-    "Account Payable":            {"required": False, "default": None, "dtype": "str"},
-    "contacts / name":            {"required": False, "default": None, "dtype": "str"},
-    "contacts / email":           {"required": False, "default": None, "dtype": "str"},
-    "contacts / title":           {"required": False, "default": None, "dtype": "str"},
-    "contacts / phone":           {"required": False, "default": None, "dtype": "str"},
-    "contacts / mobile":          {"required": False, "default": None, "dtype": "str"},
-    "contacts / Job Title":       {"required": False, "default": None, "dtype": "str"},
+    "Name": {"required": True, "default": None, "dtype": "str"},
+    "Job Position": {"required": False, "default": None, "dtype": "str"},
+    "Mobile": {"required": False, "default": None, "dtype": "str"},
+    "Phone": {"required": False, "default": None, "dtype": "str"},
+    "Email": {"required": False, "default": None, "dtype": "str"},
+    "Street": {"required": False, "default": None, "dtype": "str"},
+    "Street2": {"required": False, "default": None, "dtype": "str"},
+    "City": {"required": False, "default": None, "dtype": "str"},
+    "State": {"required": False, "default": None, "dtype": "str"},
+    "Zip": {"required": False, "default": None, "dtype": "str"},
+    "Country": {"required": False, "default": None, "dtype": "str"},
+    "Website": {"required": False, "default": None, "dtype": "str"},
+    "Is a Company": {"required": False, "default": False, "dtype": "bool"},
+    "Reference": {"required": False, "default": None, "dtype": "str"},
+    "Credit Limit": {"required": False, "default": 0, "dtype": "float"},
+    "Branch": {"required": False, "default": None, "dtype": "str"},
+    "Customer Rank": {"required": False, "default": 1, "dtype": "int"},
+    "Salesperson": {"required": False, "default": None, "dtype": "str"},
+    "Category": {"required": False, "default": None, "dtype": "str"},
+    "Sub Category": {"required": False, "default": None, "dtype": "str"},
+    "Note": {"required": False, "default": None, "dtype": "str"},
+    "Account Receivable": {"required": False, "default": None, "dtype": "str"},
+    "Account Payable": {"required": False, "default": None, "dtype": "str"},
+    "contacts / name": {"required": False, "default": None, "dtype": "str"},
+    "contacts / email": {"required": False, "default": None, "dtype": "str"},
+    "contacts / title": {"required": False, "default": None, "dtype": "str"},
+    "contacts / phone": {"required": False, "default": None, "dtype": "str"},
+    "contacts / mobile": {"required": False, "default": None, "dtype": "str"},
+    "contacts / Job Title": {"required": False, "default": None, "dtype": "str"},
 }
 
 VENDOR_SCHEMA: dict[str, dict] = {
-    "Vendor Name":                {"required": True,  "default": None, "dtype": "str"},
-    "Street":                     {"required": False, "default": None, "dtype": "str"},
-    "Street2":                    {"required": False, "default": None, "dtype": "str"},
-    "City":                       {"required": False, "default": None, "dtype": "str"},
-    "State":                      {"required": False, "default": None, "dtype": "str"},
-    "Zip":                        {"required": False, "default": None, "dtype": "str"},
-    "Country":                    {"required": False, "default": None, "dtype": "str"},
-    "Tax ID":                     {"required": False, "default": None, "dtype": "str"},
-    "Phone":                      {"required": False, "default": None, "dtype": "str"},
-    "Mobile":                     {"required": False, "default": None, "dtype": "str"},
-    "Email":                      {"required": False, "default": None, "dtype": "str"},
-    "Website":                    {"required": False, "default": None, "dtype": "str"},
-    "Is a Company":               {"required": False, "default": True,  "dtype": "bool"},
-    "Reference":                  {"required": False, "default": None, "dtype": "str"},
-    "Supplier Rank":              {"required": False, "default": 1,    "dtype": "int"},
-    "Address Type":               {"required": False, "default": None, "dtype": "str"},
-    "Tags":                       {"required": False, "default": None, "dtype": "str"},
-    "Contact/Name":               {"required": False, "default": None, "dtype": "str"},
-    "Contact/Title":              {"required": False, "default": None, "dtype": "str"},
-    "Contact/Job Position":       {"required": False, "default": None, "dtype": "str"},
-    "Contact/Email":              {"required": False, "default": None, "dtype": "str"},
-    "Contact/Phone":              {"required": False, "default": None, "dtype": "str"},
-    "Contact/Mobile":             {"required": False, "default": None, "dtype": "str"},
+    "Vendor Name": {"required": True, "default": None, "dtype": "str"},
+    "Street": {"required": False, "default": None, "dtype": "str"},
+    "Street2": {"required": False, "default": None, "dtype": "str"},
+    "City": {"required": False, "default": None, "dtype": "str"},
+    "State": {"required": False, "default": None, "dtype": "str"},
+    "Zip": {"required": False, "default": None, "dtype": "str"},
+    "Country": {"required": False, "default": None, "dtype": "str"},
+    "Tax ID": {"required": False, "default": None, "dtype": "str"},
+    "Phone": {"required": False, "default": None, "dtype": "str"},
+    "Mobile": {"required": False, "default": None, "dtype": "str"},
+    "Email": {"required": False, "default": None, "dtype": "str"},
+    "Website": {"required": False, "default": None, "dtype": "str"},
+    "Reference": {"required": False, "default": None, "dtype": "str"},
+    "Supplier Rank": {"required": False, "default": 1, "dtype": "int"},
+    "Address Type": {"required": False, "default": None, "dtype": "str"},
+    "Tags": {"required": False, "default": None, "dtype": "str"},
+    "Contact/Name": {"required": False, "default": None, "dtype": "str"},
+    "Contact/Title": {"required": False, "default": None, "dtype": "str"},
+    "Contact/Job Position": {"required": False, "default": None, "dtype": "str"},
+    "Contact/Email": {"required": False, "default": None, "dtype": "str"},
+    "Contact/Phone": {"required": False, "default": None, "dtype": "str"},
+    "Contact/Mobile": {"required": False, "default": None, "dtype": "str"},
 }
 
 SCHEMA_MAP = {"customer": CUSTOMER_SCHEMA, "vendor": VENDOR_SCHEMA}
@@ -108,6 +127,7 @@ MANDATORY_FIELD = {"customer": "Name", "vendor": "Vendor Name"}
 # 1c. UNIVERSAL FILE STRUCTURE NORMALISER
 #     Detects non-flat layouts and reshapes them into a standard flat table.
 # ===========================================================================
+
 
 def ai_normalise_structure(
     df: pd.DataFrame,
@@ -135,7 +155,10 @@ def ai_normalise_structure(
     if _is_flat_table(df):
         return df
 
-    logger.info("Non-flat structure detected in '%s' — running AI structure analyser", source_path.name)
+    logger.info(
+        "Non-flat structure detected in '%s' — running AI structure analyser",
+        source_path.name,
+    )
 
     # Send a compact snapshot of the raw file to the AI:
     # first 12 rows × all columns, serialised as a JSON array of arrays.
@@ -242,15 +265,22 @@ Return ONLY the JSON object.
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            raw_text = _complete_with_fallback(client, system_prompt, user_prompt, max_tokens=1500)
-            raw_text = re.sub(r"^```[a-z]*\n?|```$", "", raw_text, flags=re.MULTILINE).strip()
+            raw_text = _complete_with_fallback(
+                client, system_prompt, user_prompt, max_tokens=1500
+            )
+            raw_text = re.sub(
+                r"^```[a-z]*\n?|```$", "", raw_text, flags=re.MULTILINE
+            ).strip()
             plan = json.loads(raw_text)
-            logger.info("Structure analysis: type=%s | %s",
-                        plan.get("structure_type"), plan.get("description"))
+            logger.info(
+                "Structure analysis: type=%s | %s",
+                plan.get("structure_type"),
+                plan.get("description"),
+            )
             return _execute_reshape_plan(df, plan, source_path)
         except (json.JSONDecodeError, _LLMUnavailable) as exc:
             logger.warning("Structure analysis attempt %d failed: %s", attempt + 1, exc)
-            time.sleep(2 ** attempt)
+            time.sleep(2**attempt)
 
     logger.warning("Structure analysis failed — returning raw DataFrame as-is")
     return df
@@ -273,7 +303,9 @@ def _is_flat_table(df: pd.DataFrame) -> bool:
     col0 = df.iloc[:, 0].fillna("").astype(str).str.strip()
 
     # Signal 1: repeating label pattern in col 0 (block structure)
-    label_pattern = re.compile(r"^(a/c ref:?|name:|tel:?|code:?|ref:?|id:?|telephone|a/c ref)$", re.IGNORECASE)
+    label_pattern = re.compile(
+        r"^(a/c ref:?|name:|tel:?|code:?|ref:?|id:?|telephone|a/c ref)$", re.IGNORECASE
+    )
     label_count = sum(1 for v in col0 if label_pattern.match(v))
     if label_count >= 3:
         return False
@@ -314,19 +346,23 @@ def _execute_reshape_plan(
 
     # ── VERTICAL: transpose rows↔cols ──
     if action == "transpose":
-        field_col  = rp.get("field_name_col", 0)
+        field_col = rp.get("field_name_col", 0)
         data_start = rp.get("data_start_col", 1)
         transposed = df.iloc[:, data_start:].T.copy()
         transposed.columns = df.iloc[:, field_col].fillna("").astype(str).tolist()
         transposed.reset_index(drop=True, inplace=True)
         transposed.dropna(how="all", inplace=True)
-        logger.info("Transposed vertical layout → %d rows × %d cols", len(transposed), len(transposed.columns))
+        logger.info(
+            "Transposed vertical layout → %d rows × %d cols",
+            len(transposed),
+            len(transposed.columns),
+        )
         return transposed
 
     # ── MULTI_HEADER: collapse header rows ──
     if action == "collapse_headers":
         header_rows = rp.get("header_rows", [0])
-        data_start  = rp.get("data_start_row", len(header_rows))
+        data_start = rp.get("data_start_row", len(header_rows))
         # Combine header rows by joining non-empty values
         combined_header = []
         for col_idx in range(df.shape[1]):
@@ -337,9 +373,11 @@ def _execute_reshape_plan(
             ]
             combined_header.append(" / ".join(parts) if parts else f"col_{col_idx}")
         result = df.iloc[data_start:].copy()
-        result.columns = combined_header[:len(result.columns)]
+        result.columns = combined_header[: len(result.columns)]
         result.reset_index(drop=True, inplace=True)
-        logger.info("Collapsed %d header rows → %d data rows", len(header_rows), len(result))
+        logger.info(
+            "Collapsed %d header rows → %d data rows", len(header_rows), len(result)
+        )
         return result
 
     # ── PREAMBLE: skip junk rows before real data ──
@@ -355,14 +393,18 @@ def _execute_reshape_plan(
 
     # ── MIXED: filter out non-data rows ──
     if action == "filter_rows":
-        header_row  = rp.get("header_row", 0)
-        signal      = rp.get("data_row_signal", {})
-        sig_col     = signal.get("col", 0)
+        header_row = rp.get("header_row", 0)
+        signal = rp.get("data_row_signal", {})
+        sig_col = signal.get("col", 0)
         sig_pattern = signal.get("pattern", "")
-        result = df.iloc[header_row + 1:].copy()
+        result = df.iloc[header_row + 1 :].copy()
         result.columns = df.iloc[header_row].fillna("").astype(str).str.strip().tolist()
         if sig_pattern:
-            mask = result.iloc[:, sig_col].astype(str).str.contains(sig_pattern, na=False, regex=True)
+            mask = (
+                result.iloc[:, sig_col]
+                .astype(str)
+                .str.contains(sig_pattern, na=False, regex=True)
+            )
             result = result[mask]
         result.reset_index(drop=True, inplace=True)
         logger.info("Filtered mixed rows → %d data rows", len(result))
@@ -380,8 +422,8 @@ def _reshape_block(df: pd.DataFrame, rp: dict) -> pd.DataFrame:
     """
     signal_col = rp.get("record_start_signal", {}).get("col", 0)
     signal_val = rp.get("record_start_signal", {}).get("value", "")
-    skip_rows  = set(rp.get("skip_rows", []))
-    field_map  = rp.get("field_map", [])
+    skip_rows = set(rp.get("skip_rows", []))
+    field_map = rp.get("field_map", [])
 
     if not field_map:
         logger.warning("Block reshape: no field_map provided — returning raw")
@@ -397,7 +439,11 @@ def _reshape_block(df: pd.DataFrame, rp: dict) -> pd.DataFrame:
             block_starts.append(i)
 
     if not block_starts:
-        logger.warning("Block reshape: no block start rows found for signal %r=%r", signal_col, signal_val)
+        logger.warning(
+            "Block reshape: no block start rows found for signal %r=%r",
+            signal_col,
+            signal_val,
+        )
         return df
 
     # Extract each block into a record
@@ -408,8 +454,8 @@ def _reshape_block(df: pd.DataFrame, rp: dict) -> pd.DataFrame:
         record = {}
         for fm in field_map:
             row_offset = fm.get("row_offset", 0)
-            col_idx    = fm.get("col", 0)
-            raw_row    = start + row_offset
+            col_idx = fm.get("col", 0)
+            raw_row = start + row_offset
             if raw_row < len(df) and col_idx < df.shape[1]:
                 val = str(df.iloc[raw_row, col_idx]).strip()
                 record[fm["field"]] = val if val not in ("", "nan") else None
@@ -420,8 +466,12 @@ def _reshape_block(df: pd.DataFrame, rp: dict) -> pd.DataFrame:
     result = pd.DataFrame(records, columns=col_names)
     result.dropna(how="all", inplace=True)
     result.reset_index(drop=True, inplace=True)
-    logger.info("Block reshape: %d blocks → %d records × %d fields",
-                len(block_starts), len(result), len(col_names))
+    logger.info(
+        "Block reshape: %d blocks → %d records × %d fields",
+        len(block_starts),
+        len(result),
+        len(col_names),
+    )
     return result
 
 
@@ -443,17 +493,13 @@ def _reshape_block(df: pd.DataFrame, rp: dict) -> pd.DataFrame:
 # Without OPENROUTER_API_KEY set, the fallback is a no-op and behaviour is
 # identical to before (Anthropic-only, with backoff/retry).
 
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-OPENROUTER_MODEL   = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.3-70b-instruct:free")
-OPENROUTER_URL     = "https://openrouter.ai/api/v1/chat/completions"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 # Gemini sits between Claude and OpenRouter: better quality than OpenRouter's
 # free models, and (on the free Gemini tier) gemini-3.1-flash-lite gives a
 # much higher daily quota (500 RPD) than e.g. gemini-2.5-flash (20 RPD) — see
 # https://ai.dev/rate-limit for current per-model limits on your key.
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL   = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
-GEMINI_URL     = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
+GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
 
 # How many times the Anthropic SDK retries a 429 internally before giving up
 # and letting _complete_with_fallback() switch to the fallback chain. Claude's
@@ -461,7 +507,6 @@ GEMINI_URL     = "https://generativelanguage.googleapis.com/v1beta/models/{model
 # retries first rather than dropping down on the very first rate-limit
 # response — but capped, so a sustained rate limit still fails over instead
 # of retrying forever.
-ANTHROPIC_MAX_RETRIES = int(os.getenv("ANTHROPIC_MAX_RETRIES", "3"))
 
 # Per-provider request pacing. RATE_LIMIT_RPM previously existed in .env but
 # was never actually read anywhere — every call fired as fast as the loop
@@ -470,8 +515,6 @@ ANTHROPIC_MAX_RETRIES = int(os.getenv("ANTHROPIC_MAX_RETRIES", "3"))
 # tier is ~5 RPM; gemini-3.1-flash-lite's free tier is 15 RPM), so pacing them
 # all to one shared rate would throttle a faster fallback down to the
 # slowest provider's pace. Each gets its own independent minimum interval.
-ANTHROPIC_RATE_LIMIT_RPM = float(os.getenv("RATE_LIMIT_RPM") or 5)
-GEMINI_RATE_LIMIT_RPM    = float(os.getenv("GEMINI_RATE_LIMIT_RPM") or 15)
 
 _last_call_at: dict[str, float] = {}
 
@@ -529,8 +572,8 @@ _anthropic_credits_exhausted = False
 def _retry_after_seconds(exc: anthropic.APIError) -> float | None:
     """Read the Retry-After header off a rate-limit error, if the SDK exposes it."""
     response = getattr(exc, "response", None)
-    headers  = getattr(response, "headers", None)
-    value    = headers.get("retry-after") if headers else None
+    headers = getattr(response, "headers", None)
+    value = headers.get("retry-after") if headers else None
     if value:
         try:
             return float(value)
@@ -548,17 +591,19 @@ def _call_gemini(system_prompt: str, user_prompt: str, max_tokens: int) -> str |
     if not GEMINI_API_KEY:
         return None
 
-    payload = json.dumps({
-        "systemInstruction": {"parts": [{"text": system_prompt}]},
-        "contents": [{"parts": [{"text": user_prompt}]}],
-        "generationConfig": {
-            "maxOutputTokens": max_tokens,
-            # Without this, Gemini 2.5+ "thinking" models can spend the whole
-            # max_tokens budget on internal reasoning and return no visible
-            # text at all (finishReason MAX_TOKENS, empty content parts).
-            "thinkingConfig": {"thinkingBudget": 0},
-        },
-    }).encode("utf-8")
+    payload = json.dumps(
+        {
+            "systemInstruction": {"parts": [{"text": system_prompt}]},
+            "contents": [{"parts": [{"text": user_prompt}]}],
+            "generationConfig": {
+                "maxOutputTokens": max_tokens,
+                # Without this, Gemini 2.5+ "thinking" models can spend the whole
+                # max_tokens budget on internal reasoning and return no visible
+                # text at all (finishReason MAX_TOKENS, empty content parts).
+                "thinkingConfig": {"thinkingBudget": 0},
+            },
+        }
+    ).encode("utf-8")
 
     url = GEMINI_URL.format(model=GEMINI_MODEL, key=GEMINI_API_KEY)
     req = urllib.request.Request(
@@ -576,7 +621,9 @@ def _call_gemini(system_prompt: str, user_prompt: str, max_tokens: int) -> str |
         return None
 
 
-def _call_openrouter(system_prompt: str, user_prompt: str, max_tokens: int) -> str | None:
+def _call_openrouter(
+    system_prompt: str, user_prompt: str, max_tokens: int
+) -> str | None:
     """
     Run the same prompt against a free model on OpenRouter.
     Returns the raw response text, or None if OpenRouter is not configured
@@ -585,21 +632,23 @@ def _call_openrouter(system_prompt: str, user_prompt: str, max_tokens: int) -> s
     if not OPENROUTER_API_KEY:
         return None
 
-    payload = json.dumps({
-        "model": OPENROUTER_MODEL,
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user",   "content": user_prompt},
-        ],
-        "max_tokens": max_tokens,
-    }).encode("utf-8")
+    payload = json.dumps(
+        {
+            "model": OPENROUTER_MODEL,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "max_tokens": max_tokens,
+        }
+    ).encode("utf-8")
 
     req = urllib.request.Request(
         OPENROUTER_URL,
         data=payload,
         headers={
             "Authorization": f"Bearer {OPENROUTER_API_KEY}",
-            "Content-Type":  "application/json",
+            "Content-Type": "application/json",
         },
         method="POST",
     )
@@ -658,7 +707,11 @@ def _complete_with_fallback(
             exc = caught
 
     if exc is not None:
-        logger.warning("Anthropic unavailable (%s) – trying Gemini fallback (%s) …", exc, GEMINI_MODEL)
+        logger.warning(
+            "Anthropic unavailable (%s) – trying Gemini fallback (%s) …",
+            exc,
+            GEMINI_MODEL,
+        )
     _pace_call("gemini", GEMINI_RATE_LIMIT_RPM)
     fallback_text = _call_gemini(system_prompt, user_prompt, max_tokens)
     if fallback_text is not None:
@@ -693,6 +746,7 @@ def _complete_with_fallback(
 # 2. FILE LOADER  –  handles .xlsx / .xls / .csv with auto-header detection
 # ===========================================================================
 
+
 def load_raw_file(filepath: str | Path) -> pd.DataFrame:
     """
     Load a spreadsheet or CSV into a DataFrame.
@@ -714,8 +768,17 @@ def load_raw_file(filepath: str | Path) -> pd.DataFrame:
     else:
         raise ValueError(f"Unsupported file type: {suffix}")
 
-    # Drop fully-empty rows and columns
+    # Treat whitespace-only cells as empty before dropping rows. Remove only
+    # rows with no data in any column; partially populated records stay in the
+    # DataFrame so validation can report their missing fields.
+    df = df.replace(r"^\s*$", pd.NA, regex=True)
+    rows_before_empty_drop = len(df)
     df.dropna(how="all", inplace=True)
+    empty_rows_dropped = rows_before_empty_drop - len(df)
+    if empty_rows_dropped:
+        logger.info(
+            "Dropped %d fully empty rows from '%s'", empty_rows_dropped, path.name
+        )
     df.dropna(axis=1, how="all", inplace=True)
 
     # Strip whitespace from column names and cell values
@@ -725,10 +788,14 @@ def load_raw_file(filepath: str | Path) -> pd.DataFrame:
     # Drop Pandas auto-generated "Unnamed" columns
     df = df.loc[:, ~df.columns.str.startswith("Unnamed")]
 
-    logger.info("Loaded %d rows × %d cols from '%s' (header row %d)",
-                len(df), len(df.columns), path.name, header_row)
+    logger.info(
+        "Loaded %d rows × %d cols from '%s' (header row %d)",
+        len(df),
+        len(df.columns),
+        path.name,
+        header_row,
+    )
     return df
-
 
 
 def _detect_header_row(probe: pd.DataFrame) -> int:
@@ -739,8 +806,10 @@ def _detect_header_row(probe: pd.DataFrame) -> int:
     best_row, best_score = 0, 0
     for i, row in probe.iterrows():
         score = sum(
-            1 for v in row
-            if isinstance(v, str) and v.strip()
+            1
+            for v in row
+            if isinstance(v, str)
+            and v.strip()
             and not re.fullmatch(r"[\d\s.,-/]+", v.strip())
         )
         if score > best_score:
@@ -751,6 +820,7 @@ def _detect_header_row(probe: pd.DataFrame) -> int:
 # ===========================================================================
 # 3. AI COLUMN MAPPER  –  one LLM call, structured JSON output
 # ===========================================================================
+
 
 def ai_map_columns(
     raw_columns: list[str],
@@ -835,26 +905,35 @@ Return a JSON object with EXACTLY this structure (no other keys):
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            raw_text = _complete_with_fallback(client, system_prompt, user_prompt, max_tokens=1000)
-            raw_text = re.sub(r"^```[a-z]*\n?|```$", "", raw_text, flags=re.MULTILINE).strip()
-            result   = json.loads(raw_text)
-            mapping  = result.get("mapping", {})
-            flags    = result.get("flags", {
-                "needs_address_split": [],
-                "needs_field_clean":   [],
-            })
+            raw_text = _complete_with_fallback(
+                client, system_prompt, user_prompt, max_tokens=1000
+            )
+            raw_text = re.sub(
+                r"^```[a-z]*\n?|```$", "", raw_text, flags=re.MULTILINE
+            ).strip()
+            result = json.loads(raw_text)
+            mapping = result.get("mapping", {})
+            flags = result.get(
+                "flags",
+                {
+                    "needs_address_split": [],
+                    "needs_field_clean": [],
+                },
+            )
             logger.info(
                 "AI column mapping: %d mappings | address_split=%s | field_clean=%s",
                 len(mapping),
                 flags.get("needs_address_split", []),
-                flags.get("needs_field_clean",   []),
+                flags.get("needs_field_clean", []),
             )
             return mapping, flags
         except (json.JSONDecodeError, _LLMUnavailable) as exc:
             logger.warning("AI mapping attempt %d failed: %s", attempt + 1, exc)
-            time.sleep(2 ** attempt)
+            time.sleep(2**attempt)
 
-    logger.error("AI column mapping failed after %d attempts – returning empty map", max_retries)
+    logger.error(
+        "AI column mapping failed after %d attempts – returning empty map", max_retries
+    )
     return {}, {"needs_address_split": [], "needs_field_clean": []}
 
 
@@ -862,7 +941,7 @@ Return a JSON object with EXACTLY this structure (no other keys):
 # 4. RULE-BASED PANDAS CLEANER  –  fast, deterministic, zero API cost
 # ===========================================================================
 
-_PHONE_RE = re.compile(r"[^\d+]")          # strip non-digit / non-plus
+_PHONE_RE = re.compile(r"[^\d+]")  # strip non-digit / non-plus
 _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 
 
@@ -880,7 +959,9 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
     schema = SCHEMA_MAP[data_type]
 
     # --- Name fields: Title Case ---
-    name_cols = [c for c in df.columns if c.lower() in ("name", "vendor name", "company")]
+    name_cols = [
+        c for c in df.columns if c.lower() in ("name", "vendor name", "company")
+    ]
     for col in name_cols:
         df[col] = df[col].apply(_title_case)
 
@@ -888,7 +969,9 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
     # Both Phone and Mobile are preserved as separate Odoo fields.
     # Raw "phone" -> "Phone" and raw "mobile" -> "Mobile" are kept distinct.
     # If a field contains a person name instead of digits, _clean_phone returns None.
-    phone_cols = [c for c in df.columns if any(k in c.lower() for k in ("phone", "mobile", "tel"))]
+    phone_cols = [
+        c for c in df.columns if any(k in c.lower() for k in ("phone", "mobile", "tel"))
+    ]
     for col in phone_cols:
         df[col] = df[col].apply(_clean_phone)
 
@@ -898,9 +981,14 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
     # (e.g. "TIMOTHY EKENE IKELUGO"). We detect this and move it to child_ids/name.
     if "child_ids" in df.columns:
         child_name_col = next(
-            (c for c in df.columns if c.lower() in ("child_ids/name", "contacts / name")),
-            None
+            (
+                c
+                for c in df.columns
+                if c.lower() in ("child_ids/name", "contacts / name")
+            ),
+            None,
         )
+
         def _rescue_child_id(row: pd.Series) -> pd.Series:
             val = row.get("child_ids", "")
             if not isinstance(val, str):
@@ -910,10 +998,13 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
             if v.lower() in ("false", "true", "", "0", "1") or re.fullmatch(r"\d+", v):
                 return row
             # Looks like an actual name: move it to child_ids/name if that cell is empty
-            if child_name_col and (pd.isna(row.get(child_name_col)) or str(row.get(child_name_col, "")).strip() == ""):
+            if child_name_col and (
+                pd.isna(row.get(child_name_col))
+                or str(row.get(child_name_col, "")).strip() == ""
+            ):
                 row = row.copy()
                 row[child_name_col] = v.title()
-            row["child_ids"] = None   # clear the mis-used cell
+            row["child_ids"] = None  # clear the mis-used cell
             return row
 
         if child_name_col:
@@ -923,7 +1014,9 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
         df.drop(columns=["child_ids"], inplace=True, errors="ignore")
 
     # --- Email: lowercase + validate ---
-    email_cols = [c for c in df.columns if "email" in c.lower() or "e-mail" in c.lower()]
+    email_cols = [
+        c for c in df.columns if "email" in c.lower() or "e-mail" in c.lower()
+    ]
     for col in email_cols:
         df[col] = df[col].apply(_clean_email)
 
@@ -940,10 +1033,14 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
     # --- Is a Company: INFER from name when column is absent ---
     # This handles files like FZR raw data that have no Is a Company column.
     # We look for the name column and derive the boolean from the name value.
-    if not company_cols:
+    if data_type == "customer" and not company_cols:
         name_col = next(
-            (c for c in df.columns if c.lower() in ("name", "vendor name", "description")),
-            None
+            (
+                c
+                for c in df.columns
+                if c.lower() in ("name", "vendor name", "description")
+            ),
+            None,
         )
         if name_col:
             df["Is a Company"] = df[name_col].apply(infer_is_company)
@@ -953,7 +1050,14 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
     for col in df.columns:
         if col.lower() in ("state_id", "state", "country_id", "country"):
             df[col] = df[col].apply(
-                lambda x: None if (isinstance(x, str) and x.strip().lower() in ("false", "true", "0")) else x
+                lambda x: (
+                    None
+                    if (
+                        isinstance(x, str)
+                        and x.strip().lower() in ("false", "true", "0")
+                    )
+                    else x
+                )
             )
 
     # --- state / country: scan the ENTIRE ROW for location clues ---
@@ -964,26 +1068,49 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
     #      street = "40 KAYODE STREET OGBA IKEJA LAGOS STATE Nigeria"
     # We scan ALL address-like columns on each row, concatenate their text,
     # and run the extraction once on the full combined string.
-    country_col = next((c for c in df.columns if c.lower() in ("country_id", "country")), None)
-    state_col   = next((c for c in df.columns if c.lower() in ("state_id", "state")), None)
+    country_col = next(
+        (c for c in df.columns if c.lower() in ("country_id", "country")), None
+    )
+    state_col = next(
+        (c for c in df.columns if c.lower() in ("state_id", "state")), None
+    )
 
     # Columns that might carry address text in any client file
-    _ADDR_HINTS = {"street", "street2", "address", "addr", "city", "area",
-                   "location", "region", "zone", "district", "state_id",
-                   "country_id", "child_ids/street"}
-    addr_cols = [c for c in df.columns
-                 if (c.lower() in _ADDR_HINTS
-                     or any(k in c.lower() for k in ("street", "address", "addr", "city")))
-                 and "type" not in c.lower()    # exclude "Address Type" column
-                 and "address type" not in c.lower()]
+    _ADDR_HINTS = {
+        "street",
+        "street2",
+        "address",
+        "addr",
+        "city",
+        "area",
+        "location",
+        "region",
+        "zone",
+        "district",
+        "state_id",
+        "country_id",
+        "child_ids/street",
+    }
+    addr_cols = [
+        c
+        for c in df.columns
+        if (
+            c.lower() in _ADDR_HINTS
+            or any(k in c.lower() for k in ("street", "address", "addr", "city"))
+        )
+        and "type" not in c.lower()  # exclude "Address Type" column
+        and "address type" not in c.lower()
+    ]
 
     for idx, row in df.iterrows():
-        state_missing   = (state_col   is not None and
-                           (pd.isna(row.get(state_col))   or
-                            str(row.get(state_col,   "")).strip() in ("", "None")))
-        country_missing = (country_col is not None and
-                           (pd.isna(row.get(country_col)) or
-                            str(row.get(country_col, "")).strip() in ("", "None")))
+        state_missing = state_col is not None and (
+            pd.isna(row.get(state_col))
+            or str(row.get(state_col, "")).strip() in ("", "None")
+        )
+        country_missing = country_col is not None and (
+            pd.isna(row.get(country_col))
+            or str(row.get(country_col, "")).strip() in ("", "None")
+        )
 
         if not (state_missing or country_missing):
             continue
@@ -992,9 +1119,13 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
         parts = []
         for col in addr_cols:
             v = row.get(col, "")
-            if isinstance(v, str) and v.strip() and v.strip().lower() not in ("false", "none", "nan"):
+            if (
+                isinstance(v, str)
+                and v.strip()
+                and v.strip().lower() not in ("false", "none", "nan")
+            ):
                 parts.append(v.strip())
-        combined = " | ".join(parts)   # separator keeps city tokens distinct
+        combined = " | ".join(parts)  # separator keeps city tokens distinct
 
         if not combined.strip():
             continue
@@ -1023,7 +1154,11 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
     zip_cols = [c for c in df.columns if c.lower() in ("zip", "postal", "zip code")]
     for col in zip_cols:
         df[col] = df[col].apply(
-            lambda x: str(int(float(x))) if (isinstance(x, str) and re.fullmatch(r"\d+\.0", x)) else x
+            lambda x: (
+                str(int(float(x)))
+                if (isinstance(x, str) and re.fullmatch(r"\d+\.0", x))
+                else x
+            )
         )
 
     # --- Account Receivable: derive from Category (FZR-style files) ---
@@ -1035,28 +1170,30 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
     #   Not Sales    → 112006 Related Party Receivables
     # Only fills blank cells — never overwrites a value already present.
     _AR_MAP = {
-        "horeca":      "112002 Horeca Receivables",
-        "retail":      "112003 Retail Receivables",
+        "horeca": "112002 Horeca Receivables",
+        "retail": "112003 Retail Receivables",
         "distributor": "112001 Distributors Receivables",
-        "others":      "112005 Other Receivables",
-        "not sales":   "112006 Related Party Receivables",
+        "others": "112005 Other Receivables",
+        "not sales": "112006 Related Party Receivables",
     }
     cat_col = next((c for c in df.columns if c.lower() == "category"), None)
-    ar_col  = next((c for c in df.columns if "account receivable" in c.lower()), None)
+    ar_col = next((c for c in df.columns if "account receivable" in c.lower()), None)
     if cat_col and data_type == "customer":
         if ar_col is None:
             df["Account Receivable"] = None
             ar_col = "Account Receivable"
         mask = df[ar_col].isna() | (df[ar_col].astype(str).str.strip() == "")
         df.loc[mask, ar_col] = df.loc[mask, cat_col].apply(
-            lambda x: _AR_MAP.get(str(x).strip().lower()) if isinstance(x, str) else None
+            lambda x: (
+                _AR_MAP.get(str(x).strip().lower()) if isinstance(x, str) else None
+            )
         )
 
     # --- Note: derive from Branch column when Note is absent ---
     # In FZR raw data, "Branch" contains values like "Office Lagos", "Dave : SP"
     # which your BAs copy into the Note field.
     branch_col = next((c for c in df.columns if c.lower() == "branch"), None)
-    note_col   = next((c for c in df.columns if c.lower() == "note"), None)
+    note_col = next((c for c in df.columns if c.lower() == "note"), None)
     if branch_col and data_type == "customer":
         if note_col is None:
             df["Note"] = None
@@ -1072,7 +1209,9 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
     # synonym like "Federal Capital Territory" instead of "FCT"). Safe
     # no-op on the first call (pre-mapping), since the State column won't
     # exist under its mapped name yet.
-    _final_state_col = next((c for c in df.columns if c.lower() in ("state", "state_id")), None)
+    _final_state_col = next(
+        (c for c in df.columns if c.lower() in ("state", "state_id")), None
+    )
     if _final_state_col:
         df[_final_state_col] = df[_final_state_col].apply(_normalize_ng_state)
 
@@ -1080,6 +1219,7 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
 
 
 # -- helper functions --------------------------------------------------------
+
 
 def _title_case(val: Any) -> Any:
     if not isinstance(val, str) or not val.strip():
@@ -1108,34 +1248,133 @@ def _clean_email(val: Any) -> Any:
 def _coerce_bool(val: Any) -> bool:
     if isinstance(val, bool):
         return val
+    if pd.isna(val):
+        return False
     if isinstance(val, (int, float)):
         return bool(val)
     if isinstance(val, str):
         return val.strip().lower() in ("true", "1", "yes", "y")
-    return True
+    return False
 
 
 # Corporate keywords that strongly indicate a business entity
 _COMPANY_KEYWORDS = {
-    "ltd", "limited", "co.", "co,", "plc", "inc", "corp", "corporation",
-    "llc", "llp", "nig", "nigeria", "ent", "enterprises", "enterprise",
-    "int", "international", "services", "service", "solutions", "solution",
-    "group", "associates", "association", "holdings", "holding",
-    "industries", "industry", "production", "productions", "manufacturing",
-    "trading", "logistics", "consulting", "consultancy", "technologies",
-    "technology", "systems", "global", "agency", "agencies",
-    "pharmaceuticals", "pharmaceutical", "pharmacy", "healthcare",
-    "hospital", "clinic", "medical", "surgical", "laboratory", "labs",
-    "publishing", "publishers", "media", "communications", "foundation",
-    "restaurant", "supermarket", "stores", "store", "market", "bakery",
-    "hotel", "suites", "ventures", "investment", "investments", "capital",
-    "properties", "property", "real estate", "construction", "contractors",
-    "supplies", "supply", "distribution", "distributors", "distributor",
-    "imports", "exports", "resources", "management", "academy", "school",
-    "college", "university", "institute", "church", "ministry",
-    "agro", "agriculture", "agricultural", "produce", "farms", "farm",
-    "integrated", "nig.", "and", "sons", "son", "brothers", "bro",
+    "ltd",
+    "limited",
+    "co.",
+    "co,",
+    "plc",
+    "inc",
+    "corp",
+    "corporation",
+    "llc",
+    "llp",
+    "nig",
+    "nigeria",
+    "ent",
+    "enterprises",
+    "enterprise",
+    "int",
+    "international",
+    "services",
+    "service",
+    "solutions",
+    "solution",
+    "group",
+    "associates",
+    "association",
+    "holdings",
+    "holding",
+    "industries",
+    "industry",
+    "production",
+    "productions",
+    "manufacturing",
+    "trading",
+    "logistics",
+    "consulting",
+    "consultancy",
+    "technologies",
+    "technology",
+    "systems",
+    "global",
+    "agency",
+    "agencies",
+    "pharmaceuticals",
+    "pharmaceutical",
+    "pharmacy",
+    "healthcare",
+    "hospital",
+    "clinic",
+    "medical",
+    "surgical",
+    "laboratory",
+    "labs",
+    "publishing",
+    "publishers",
+    "media",
+    "communications",
+    "foundation",
+    "restaurant",
+    "supermarket",
+    "stores",
+    "store",
+    "market",
+    "bakery",
+    "hotel",
+    "suites",
+    "ventures",
+    "investment",
+    "investments",
+    "capital",
+    "properties",
+    "property",
+    "real estate",
+    "construction",
+    "contractors",
+    "supplies",
+    "supply",
+    "distribution",
+    "distributors",
+    "distributor",
+    "imports",
+    "exports",
+    "resources",
+    "management",
+    "academy",
+    "school",
+    "college",
+    "university",
+    "institute",
+    "church",
+    "ministry",
+    "agro",
+    "agriculture",
+    "agricultural",
+    "produce",
+    "farms",
+    "farm",
+    "integrated",
+    "nig.",
+    "and",
+    "sons",
+    "son",
+    "brothers",
+    "bro",
 }
+
+# Match complete words/phrases, not fragments inside personal names. Keep the
+# existing IT/LP markers, but ignore "and" alone because it is common in names.
+_NORMALIZED_COMPANY_KEYWORDS = {
+    " ".join(re.findall(r"[a-z0-9]+", keyword.lower()))
+    for keyword in _COMPANY_KEYWORDS
+    if keyword.lower() != "and"
+}
+_NORMALIZED_COMPANY_KEYWORDS.update({"it", "lp"})
+_COMPANY_KEYWORD_PATTERNS = tuple(
+    re.compile(rf"(?<![a-z0-9]){re.escape(keyword)}(?![a-z0-9])")
+    for keyword in _NORMALIZED_COMPANY_KEYWORDS
+)
 
 # Internal/walk-in account patterns that are NOT real companies
 _INTERNAL_ACCOUNT_PATTERNS = re.compile(
@@ -1147,48 +1386,14 @@ _INTERNAL_ACCOUNT_PATTERNS = re.compile(
 
 def infer_is_company(name: Any) -> bool:
     """
-    Infer whether a name represents a company or an individual.
-
-    Logic (mirrors what your BAs do manually):
-    1. If name contains known corporate suffix/keyword → True
-    2. If name matches internal account patterns → False
-    3. If name is a single word (no spaces) and short → likely individual → False
-    4. If name looks like "Firstname Lastname" (2 words, both capitalised,
-       no corporate keywords) → False
-    5. Default → True (when in doubt, treat as company)
+    Infer company status from legal suffixes and business terms in the name
+    when the source has no company flag. Personal names default to False.
     """
     if not isinstance(name, str) or not name.strip():
-        return True
-
-    name_clean = name.strip()
-    name_lower = name_clean.lower()
-    words = name_clean.split()
-
-    # Rule 1: corporate keyword anywhere in the name → Company
-    name_tokens = set(re.split(r"[\s,.\-\/&()]+", name_lower))
-    if name_tokens & _COMPANY_KEYWORDS:
-        return True
-
-    # Rule 2: internal account patterns → Individual / non-company
-    if _INTERNAL_ACCOUNT_PATTERNS.search(name_lower):
         return False
 
-    # Rule 3: single word (e.g. "Adaora", "Chioma", "George") → Individual
-    if len(words) == 1:
-        return False
-
-    # Rule 4: exactly 2–3 words, all look like personal names
-    # (each word is alphabetic, title-cased, no corporate keyword)
-    if len(words) <= 3:
-        looks_personal = all(
-            re.fullmatch(r"[A-Za-z'\-]+", w) and len(w) >= 2
-            for w in words
-        )
-        if looks_personal:
-            return False
-
-    # Rule 5: default → treat as company
-    return True
+    normalized_name = " ".join(re.findall(r"[a-z0-9]+", name.casefold()))
+    return any(pattern.search(normalized_name) for pattern in _COMPANY_KEYWORD_PATTERNS)
 
 
 # ---------------------------------------------------------------------------
@@ -1203,48 +1408,106 @@ def infer_is_company(name: Any) -> bool:
 # ---------------------------------------------------------------------------
 _WORLD_COUNTRIES: dict[str, str] = {
     # Africa
-    "nigeria": "Nigeria", "ghana": "Ghana", "kenya": "Kenya",
-    "south africa": "South Africa", "ethiopia": "Ethiopia",
-    "tanzania": "Tanzania", "uganda": "Uganda", "egypt": "Egypt",
-    "cameroon": "Cameroon", "ivory coast": "Ivory Coast",
-    "cote d'ivoire": "Ivory Coast", "senegal": "Senegal", "mali": "Mali",
-    "angola": "Angola", "mozambique": "Mozambique", "zambia": "Zambia",
-    "zimbabwe": "Zimbabwe", "rwanda": "Rwanda", "botswana": "Botswana",
-    "namibia": "Namibia", "benin": "Benin", "togo": "Togo",
-    "niger": "Niger Republic", "chad": "Chad", "sudan": "Sudan",
-    "somalia": "Somalia", "libya": "Libya", "morocco": "Morocco",
-    "algeria": "Algeria", "tunisia": "Tunisia",
+    "nigeria": "Nigeria",
+    "ghana": "Ghana",
+    "kenya": "Kenya",
+    "south africa": "South Africa",
+    "ethiopia": "Ethiopia",
+    "tanzania": "Tanzania",
+    "uganda": "Uganda",
+    "egypt": "Egypt",
+    "cameroon": "Cameroon",
+    "ivory coast": "Ivory Coast",
+    "cote d'ivoire": "Ivory Coast",
+    "senegal": "Senegal",
+    "mali": "Mali",
+    "angola": "Angola",
+    "mozambique": "Mozambique",
+    "zambia": "Zambia",
+    "zimbabwe": "Zimbabwe",
+    "rwanda": "Rwanda",
+    "botswana": "Botswana",
+    "namibia": "Namibia",
+    "benin": "Benin",
+    "togo": "Togo",
+    "niger": "Niger Republic",
+    "chad": "Chad",
+    "sudan": "Sudan",
+    "somalia": "Somalia",
+    "libya": "Libya",
+    "morocco": "Morocco",
+    "algeria": "Algeria",
+    "tunisia": "Tunisia",
     # Europe
-    "united kingdom": "United Kingdom", "england": "United Kingdom",
-    "scotland": "United Kingdom", "wales": "United Kingdom",
-    "germany": "Germany", "france": "France", "italy": "Italy",
-    "spain": "Spain", "portugal": "Portugal", "netherlands": "Netherlands",
-    "belgium": "Belgium", "switzerland": "Switzerland", "austria": "Austria",
-    "sweden": "Sweden", "norway": "Norway", "denmark": "Denmark",
-    "finland": "Finland", "poland": "Poland", "czech republic": "Czech Republic",
-    "hungary": "Hungary", "romania": "Romania", "greece": "Greece",
-    "turkey": "Turkey", "russia": "Russia", "ukraine": "Ukraine",
+    "united kingdom": "United Kingdom",
+    "england": "United Kingdom",
+    "scotland": "United Kingdom",
+    "wales": "United Kingdom",
+    "germany": "Germany",
+    "france": "France",
+    "italy": "Italy",
+    "spain": "Spain",
+    "portugal": "Portugal",
+    "netherlands": "Netherlands",
+    "belgium": "Belgium",
+    "switzerland": "Switzerland",
+    "austria": "Austria",
+    "sweden": "Sweden",
+    "norway": "Norway",
+    "denmark": "Denmark",
+    "finland": "Finland",
+    "poland": "Poland",
+    "czech republic": "Czech Republic",
+    "hungary": "Hungary",
+    "romania": "Romania",
+    "greece": "Greece",
+    "turkey": "Turkey",
+    "russia": "Russia",
+    "ukraine": "Ukraine",
     "ireland": "Ireland",
     # Americas
-    "united states": "United States", "usa": "United States",
-    "u.s.a": "United States", "u.s.a.": "United States",
-    "canada": "Canada", "mexico": "Mexico", "brazil": "Brazil",
-    "argentina": "Argentina", "colombia": "Colombia", "chile": "Chile",
-    "peru": "Peru", "venezuela": "Venezuela",
+    "united states": "United States",
+    "usa": "United States",
+    "u.s.a": "United States",
+    "u.s.a.": "United States",
+    "canada": "Canada",
+    "mexico": "Mexico",
+    "brazil": "Brazil",
+    "argentina": "Argentina",
+    "colombia": "Colombia",
+    "chile": "Chile",
+    "peru": "Peru",
+    "venezuela": "Venezuela",
     # Asia
-    "china": "China", "india": "India", "japan": "Japan",
-    "south korea": "South Korea", "indonesia": "Indonesia",
-    "pakistan": "Pakistan", "bangladesh": "Bangladesh",
-    "vietnam": "Vietnam", "thailand": "Thailand", "malaysia": "Malaysia",
-    "singapore": "Singapore", "philippines": "Philippines",
-    "hong kong": "Hong Kong", "taiwan": "Taiwan",
-    "saudi arabia": "Saudi Arabia", "uae": "United Arab Emirates",
-    "united arab emirates": "United Arab Emirates", "dubai": "United Arab Emirates",
-    "israel": "Israel", "iran": "Iran", "iraq": "Iraq",
-    "jordan": "Jordan", "lebanon": "Lebanon", "qatar": "Qatar",
-    "kuwait": "Kuwait", "bahrain": "Bahrain",
+    "china": "China",
+    "india": "India",
+    "japan": "Japan",
+    "south korea": "South Korea",
+    "indonesia": "Indonesia",
+    "pakistan": "Pakistan",
+    "bangladesh": "Bangladesh",
+    "vietnam": "Vietnam",
+    "thailand": "Thailand",
+    "malaysia": "Malaysia",
+    "singapore": "Singapore",
+    "philippines": "Philippines",
+    "hong kong": "Hong Kong",
+    "taiwan": "Taiwan",
+    "saudi arabia": "Saudi Arabia",
+    "uae": "United Arab Emirates",
+    "united arab emirates": "United Arab Emirates",
+    "dubai": "United Arab Emirates",
+    "israel": "Israel",
+    "iran": "Iran",
+    "iraq": "Iraq",
+    "jordan": "Jordan",
+    "lebanon": "Lebanon",
+    "qatar": "Qatar",
+    "kuwait": "Kuwait",
+    "bahrain": "Bahrain",
     # Oceania
-    "australia": "Australia", "new zealand": "New Zealand",
+    "australia": "Australia",
+    "new zealand": "New Zealand",
 }
 
 # Pre-sort longest-first so "United Kingdom" matches before "United"
@@ -1255,104 +1518,284 @@ _WORLD_COUNTRIES_SORTED: list[tuple[str, str]] = sorted(
 # All 36 states + FCT, normalised to the exact spelling Odoo expects.
 # Built from every state value seen across all your cleaned client files.
 _NG_STATES: dict[str, str] = {
-    "abia": "Abia", "adamawa": "Adamawa", "akwa ibom": "Akwa Ibom",
-    "akwaibom": "Akwa Ibom", "anambra": "Anambra", "bauchi": "Bauchi",
-    "bayelsa": "Bayelsa", "benue": "Benue", "borno": "Borno",
-    "cross river": "Cross River", "crossriver": "Cross River",
-    "delta": "Delta", "ebonyi": "Ebonyi", "edo": "Edo",
-    "ekiti": "Ekiti", "enugu": "Enugu", "fct": "FCT", "federal capital territory": "FCT", "abuja": "FCT",
-    "gombe": "Gombe", "imo": "Imo", "jigawa": "Jigawa",
-    "kaduna": "Kaduna", "kano": "Kano", "katsina": "Katsina",
-    "kebbi": "Kebbi", "kogi": "Kogi", "kwara": "Kwara",
-    "lagos": "Lagos", "nasarawa": "Nasarawa", "niger": "Niger",
-    "ogun": "Ogun", "ondo": "Ondo", "osun": "Osun", "oyo": "Oyo",
-    "plateau": "Plateau", "plateau state": "Plateau",
-    "rivers": "Rivers", "sokoto": "Sokoto", "taraba": "Taraba",
-    "yobe": "Yobe", "zamfara": "Zamfara",
+    "abia": "Abia",
+    "adamawa": "Adamawa",
+    "akwa ibom": "Akwa Ibom",
+    "akwaibom": "Akwa Ibom",
+    "anambra": "Anambra",
+    "bauchi": "Bauchi",
+    "bayelsa": "Bayelsa",
+    "benue": "Benue",
+    "borno": "Borno",
+    "cross river": "Cross River",
+    "crossriver": "Cross River",
+    "delta": "Delta",
+    "ebonyi": "Ebonyi",
+    "edo": "Edo",
+    "ekiti": "Ekiti",
+    "enugu": "Enugu",
+    "fct": "FCT",
+    "federal capital territory": "FCT",
+    "abuja": "FCT",
+    "gombe": "Gombe",
+    "imo": "Imo",
+    "jigawa": "Jigawa",
+    "kaduna": "Kaduna",
+    "kano": "Kano",
+    "katsina": "Katsina",
+    "kebbi": "Kebbi",
+    "kogi": "Kogi",
+    "kwara": "Kwara",
+    "lagos": "Lagos",
+    "nasarawa": "Nasarawa",
+    "niger": "Niger",
+    "ogun": "Ogun",
+    "ondo": "Ondo",
+    "osun": "Osun",
+    "oyo": "Oyo",
+    "plateau": "Plateau",
+    "plateau state": "Plateau",
+    "rivers": "Rivers",
+    "sokoto": "Sokoto",
+    "taraba": "Taraba",
+    "yobe": "Yobe",
+    "zamfara": "Zamfara",
 }
 
 # City → State lookup: derived from every city/state pair in your cleaned files.
 # Covers ~200+ Nigerian cities/areas. Add more rows freely as new clients appear.
 _CITY_TO_STATE: dict[str, str] = {
-    "aba": "Abia", "abakaliki": "Ebonyi", "abeokuta": "Ogun",
-    "abuja": "FCT", "abulado": "Lagos", "abule ado": "Lagos",
-    "abule egba": "Lagos", "abule iroko": "Ogun", "abule odu": "Lagos",
-    "ado ekiti": "Ekiti", "ado-ekiti": "Ekiti", "agboju": "Lagos",
-    "agege": "Lagos", "agidingbi": "Lagos", "aguda": "Lagos",
-    "ajah": "Lagos", "ajao estate": "Lagos", "ajegunle": "Lagos",
-    "akoka": "Lagos", "akure": "Ondo", "akute": "Ogun",
-    "akwa": "Anambra", "alagbado": "Lagos", "alausa": "Lagos",
-    "allen": "Lagos", "amuwo odofin": "Lagos", "amuwo-odofin": "Lagos",
-    "anthony": "Lagos", "anthony village": "Lagos", "apapa": "Lagos",
-    "apete": "Oyo", "apo": "FCT", "apongbon": "Lagos",
-    "arepo": "Ogun", "asaba": "Delta", "asokoro": "FCT",
-    "auchi": "Edo", "awkunanaw": "Enugu", "awoyaya": "Lagos",
-    "badagry": "Lagos", "badagery": "Lagos", "badagary": "Lagos",
-    "bariga": "Lagos", "bauchi": "Bauchi", "benin": "Edo",
-    "benin city": "Edo", "berger": "Lagos", "bori": "Rivers",
-    "calabar": "Cross River", "dopemu": "Lagos",
-    "duboyi": "FCT", "dutse": "FCT", "dutse apo": "FCT",
-    "ebute meta": "Lagos", "ebute metta": "Lagos", "ebute-metta": "Lagos",
-    "egbe ikotun": "Lagos", "egbeda": "Lagos", "ejigbo": "Lagos",
-    "eket": "Akwa Ibom", "elelenwo": "Rivers", "enugu": "Enugu",
-    "eruwa": "Oyo", "fadeyi": "Lagos", "fastac town": "Lagos",
-    "festac": "Lagos", "festac town": "Lagos", "festac/amuwo": "Lagos",
-    "galadimawa": "FCT", "garki": "FCT", "gbagada": "Lagos",
-    "gombe": "Gombe", "gudu": "FCT", "gwagwalada": "FCT",
-    "gwarimpa": "FCT", "gwaska": "FCT", "ibadan": "Oyo",
-    "ibafo": "Lagos", "ibeju lekki": "Lagos", "ibeju-lekki": "Lagos",
-    "idimu": "Lagos", "idu": "FCT", "idumota": "Lagos",
-    "ifako": "Lagos", "ifako-agege": "Lagos", "igando": "Lagos",
-    "iganmu": "Lagos", "ijebu-ode": "Ogun", "ijebu ode": "Ogun",
-    "ijebu mushin": "Ogun", "ijegun": "Lagos", "ijeodo": "Lagos",
-    "ijeshatedo": "Lagos", "ijora": "Lagos", "iju": "Lagos",
-    "iju ishaga": "Lagos", "ikate": "Lagos", "ikeja": "Lagos",
-    "ikorodu": "Lagos", "ikosi ketu": "Lagos", "ikosi-ketu": "Lagos",
-    "ikota": "Lagos", "ikotun": "Lagos", "ikoyi": "Lagos",
-    "ilaro": "Ogun", "ilasa": "Lagos", "ilishan-remo": "Ogun",
-    "ilorin": "Kwara", "ilupeju": "Lagos", "illupeju": "Lagos",
-    "ipaja": "Lagos", "isale-eko": "Lagos", "isale eko": "Lagos",
-    "iseyin": "Oyo", "ishaga": "Lagos", "isheri": "Lagos",
-    "isolo": "Lagos", "itafaji": "Lagos", "itire": "Lagos",
-    "iyana ipaja": "Lagos", "jabi": "FCT", "jahi": "FCT",
-    "jericho": "Oyo", "jibowu": "Lagos", "jos": "Plateau",
-    "kado": "FCT", "kaduna": "Kaduna", "kano": "Kano",
-    "karu": "FCT", "katampe": "FCT", "ketu": "Lagos",
-    "kubwa": "FCT", "kuje": "FCT", "lafiaji": "Lagos",
-    "lagos": "Lagos", "lagos island": "Lagos", "lekki": "Lagos",
-    "lekki ajah": "Lagos", "lekki phase 1": "Lagos", "lekki vgc": "Lagos",
-    "life camp": "FCT", "lokoja": "Kogi", "lugbe": "FCT",
-    "mabushi": "FCT", "magodo": "Lagos", "maitama": "FCT",
-    "makurdi": "Benue", "mararaba": "Nasarawa", "marina": "Lagos",
-    "maroko": "Lagos", "maryland": "Lagos", "matori": "Lagos",
-    "mende": "Lagos", "mile 2": "Lagos", "mowe": "Ogun",
-    "mowe/ibafo": "Ogun", "mushin": "Lagos", "nasarawa": "Nasarawa",
-    "nnewi": "Anambra", "nyanya": "FCT", "obanikoro": "Lagos",
-    "obantoko": "Ogun", "ogba": "Lagos", "ogbomosho": "Oyo",
-    "ogere": "Ogun", "ogijo": "Ogun", "ogudu": "Lagos",
-    "ojo": "Lagos", "ojodu": "Lagos", "ojodu berger": "Lagos",
-    "ojokoro": "Lagos", "ojota": "Lagos", "okota": "Lagos",
-    "okitipupa": "Ondo", "oko oba": "Lagos", "olodi": "Lagos",
-    "onigbongbo": "Lagos", "onikan": "Lagos", "onipanu": "Lagos",
-    "oniru": "Lagos", "onitsha": "Anambra", "oregun": "Lagos",
-    "orile iganmu": "Lagos", "osborne": "Lagos", "oshodi": "Lagos",
-    "oshodi-isolo": "Lagos", "osogbo": "Osun", "ota": "Ogun",
-    "owerri": "Imo", "owerrinta": "Abia", "owo": "Ondo",
-    "oworonshoki": "Lagos", "oworonsoki": "Lagos",
-    "palmgrove": "Lagos", "pedro": "Lagos", "port harcourt": "Rivers",
-    "ph": "Rivers", "sabo": "Lagos", "sagamu": "Ogun",
-    "saminaka": "Kaduna", "sango ota": "Ogun", "sango-ota": "Ogun",
-    "sangotedo": "Lagos", "satellite town": "Lagos",
-    "satalite town": "Lagos", "satelite town": "Lagos",
-    "shangisha": "Lagos", "shomolu": "Lagos", "somolu": "Lagos",
-    "suleja": "Niger", "surulere": "Lagos", "tanke": "Kwara",
-    "tinubu square": "Lagos", "ughelli": "Delta", "ugheli": "Delta",
-    "umuahia": "Abia", "umunze": "Anambra", "uwani": "Enugu",
-    "uyo": "Akwa Ibom", "vgc": "Lagos", "victoria island": "Lagos",
-    "warri": "Delta", "woji": "Rivers", "wuse": "FCT",
-    "wuse 2": "FCT", "wuse zone 5": "FCT", "yaba": "Lagos",
-    "yenagoa": "Bayelsa", "yenegoa": "Bayelsa",
-    "zone 5": "FCT", "zone 6 abuja": "FCT",
+    "aba": "Abia",
+    "abakaliki": "Ebonyi",
+    "abeokuta": "Ogun",
+    "abuja": "FCT",
+    "abulado": "Lagos",
+    "abule ado": "Lagos",
+    "abule egba": "Lagos",
+    "abule iroko": "Ogun",
+    "abule odu": "Lagos",
+    "ado ekiti": "Ekiti",
+    "ado-ekiti": "Ekiti",
+    "agboju": "Lagos",
+    "agege": "Lagos",
+    "agidingbi": "Lagos",
+    "aguda": "Lagos",
+    "ajah": "Lagos",
+    "ajao estate": "Lagos",
+    "ajegunle": "Lagos",
+    "akoka": "Lagos",
+    "akure": "Ondo",
+    "akute": "Ogun",
+    "akwa": "Anambra",
+    "alagbado": "Lagos",
+    "alausa": "Lagos",
+    "allen": "Lagos",
+    "amuwo odofin": "Lagos",
+    "amuwo-odofin": "Lagos",
+    "anthony": "Lagos",
+    "anthony village": "Lagos",
+    "apapa": "Lagos",
+    "apete": "Oyo",
+    "apo": "FCT",
+    "apongbon": "Lagos",
+    "arepo": "Ogun",
+    "asaba": "Delta",
+    "asokoro": "FCT",
+    "auchi": "Edo",
+    "awkunanaw": "Enugu",
+    "awoyaya": "Lagos",
+    "badagry": "Lagos",
+    "badagery": "Lagos",
+    "badagary": "Lagos",
+    "bariga": "Lagos",
+    "bauchi": "Bauchi",
+    "benin": "Edo",
+    "benin city": "Edo",
+    "berger": "Lagos",
+    "bori": "Rivers",
+    "calabar": "Cross River",
+    "dopemu": "Lagos",
+    "duboyi": "FCT",
+    "dutse": "FCT",
+    "dutse apo": "FCT",
+    "ebute meta": "Lagos",
+    "ebute metta": "Lagos",
+    "ebute-metta": "Lagos",
+    "egbe ikotun": "Lagos",
+    "egbeda": "Lagos",
+    "ejigbo": "Lagos",
+    "eket": "Akwa Ibom",
+    "elelenwo": "Rivers",
+    "enugu": "Enugu",
+    "eruwa": "Oyo",
+    "fadeyi": "Lagos",
+    "fastac town": "Lagos",
+    "festac": "Lagos",
+    "festac town": "Lagos",
+    "festac/amuwo": "Lagos",
+    "galadimawa": "FCT",
+    "garki": "FCT",
+    "gbagada": "Lagos",
+    "gombe": "Gombe",
+    "gudu": "FCT",
+    "gwagwalada": "FCT",
+    "gwarimpa": "FCT",
+    "gwaska": "FCT",
+    "ibadan": "Oyo",
+    "ibafo": "Lagos",
+    "ibeju lekki": "Lagos",
+    "ibeju-lekki": "Lagos",
+    "idimu": "Lagos",
+    "idu": "FCT",
+    "idumota": "Lagos",
+    "ifako": "Lagos",
+    "ifako-agege": "Lagos",
+    "igando": "Lagos",
+    "iganmu": "Lagos",
+    "ijebu-ode": "Ogun",
+    "ijebu ode": "Ogun",
+    "ijebu mushin": "Ogun",
+    "ijegun": "Lagos",
+    "ijeodo": "Lagos",
+    "ijeshatedo": "Lagos",
+    "ijora": "Lagos",
+    "iju": "Lagos",
+    "iju ishaga": "Lagos",
+    "ikate": "Lagos",
+    "ikeja": "Lagos",
+    "ikorodu": "Lagos",
+    "ikosi ketu": "Lagos",
+    "ikosi-ketu": "Lagos",
+    "ikota": "Lagos",
+    "ikotun": "Lagos",
+    "ikoyi": "Lagos",
+    "ilaro": "Ogun",
+    "ilasa": "Lagos",
+    "ilishan-remo": "Ogun",
+    "ilorin": "Kwara",
+    "ilupeju": "Lagos",
+    "illupeju": "Lagos",
+    "ipaja": "Lagos",
+    "isale-eko": "Lagos",
+    "isale eko": "Lagos",
+    "iseyin": "Oyo",
+    "ishaga": "Lagos",
+    "isheri": "Lagos",
+    "isolo": "Lagos",
+    "itafaji": "Lagos",
+    "itire": "Lagos",
+    "iyana ipaja": "Lagos",
+    "jabi": "FCT",
+    "jahi": "FCT",
+    "jericho": "Oyo",
+    "jibowu": "Lagos",
+    "jos": "Plateau",
+    "kado": "FCT",
+    "kaduna": "Kaduna",
+    "kano": "Kano",
+    "karu": "FCT",
+    "katampe": "FCT",
+    "ketu": "Lagos",
+    "kubwa": "FCT",
+    "kuje": "FCT",
+    "lafiaji": "Lagos",
+    "lagos": "Lagos",
+    "lagos island": "Lagos",
+    "lekki": "Lagos",
+    "lekki ajah": "Lagos",
+    "lekki phase 1": "Lagos",
+    "lekki vgc": "Lagos",
+    "life camp": "FCT",
+    "lokoja": "Kogi",
+    "lugbe": "FCT",
+    "mabushi": "FCT",
+    "magodo": "Lagos",
+    "maitama": "FCT",
+    "makurdi": "Benue",
+    "mararaba": "Nasarawa",
+    "marina": "Lagos",
+    "maroko": "Lagos",
+    "maryland": "Lagos",
+    "matori": "Lagos",
+    "mende": "Lagos",
+    "mile 2": "Lagos",
+    "mowe": "Ogun",
+    "mowe/ibafo": "Ogun",
+    "mushin": "Lagos",
+    "nasarawa": "Nasarawa",
+    "nnewi": "Anambra",
+    "nyanya": "FCT",
+    "obanikoro": "Lagos",
+    "obantoko": "Ogun",
+    "ogba": "Lagos",
+    "ogbomosho": "Oyo",
+    "ogere": "Ogun",
+    "ogijo": "Ogun",
+    "ogudu": "Lagos",
+    "ojo": "Lagos",
+    "ojodu": "Lagos",
+    "ojodu berger": "Lagos",
+    "ojokoro": "Lagos",
+    "ojota": "Lagos",
+    "okota": "Lagos",
+    "okitipupa": "Ondo",
+    "oko oba": "Lagos",
+    "olodi": "Lagos",
+    "onigbongbo": "Lagos",
+    "onikan": "Lagos",
+    "onipanu": "Lagos",
+    "oniru": "Lagos",
+    "onitsha": "Anambra",
+    "oregun": "Lagos",
+    "orile iganmu": "Lagos",
+    "osborne": "Lagos",
+    "oshodi": "Lagos",
+    "oshodi-isolo": "Lagos",
+    "osogbo": "Osun",
+    "ota": "Ogun",
+    "owerri": "Imo",
+    "owerrinta": "Abia",
+    "owo": "Ondo",
+    "oworonshoki": "Lagos",
+    "oworonsoki": "Lagos",
+    "palmgrove": "Lagos",
+    "pedro": "Lagos",
+    "port harcourt": "Rivers",
+    "ph": "Rivers",
+    "sabo": "Lagos",
+    "sagamu": "Ogun",
+    "saminaka": "Kaduna",
+    "sango ota": "Ogun",
+    "sango-ota": "Ogun",
+    "sangotedo": "Lagos",
+    "satellite town": "Lagos",
+    "satalite town": "Lagos",
+    "satelite town": "Lagos",
+    "shangisha": "Lagos",
+    "shomolu": "Lagos",
+    "somolu": "Lagos",
+    "suleja": "Niger",
+    "surulere": "Lagos",
+    "tanke": "Kwara",
+    "tinubu square": "Lagos",
+    "ughelli": "Delta",
+    "ugheli": "Delta",
+    "umuahia": "Abia",
+    "umunze": "Anambra",
+    "uwani": "Enugu",
+    "uyo": "Akwa Ibom",
+    "vgc": "Lagos",
+    "victoria island": "Lagos",
+    "warri": "Delta",
+    "woji": "Rivers",
+    "wuse": "FCT",
+    "wuse 2": "FCT",
+    "wuse zone 5": "FCT",
+    "yaba": "Lagos",
+    "yenagoa": "Bayelsa",
+    "yenegoa": "Bayelsa",
+    "zone 5": "FCT",
+    "zone 6 abuja": "FCT",
 }
 
 # ---------------------------------------------------------------------------
@@ -1467,11 +1910,13 @@ def _extract_state_country_from_row(combined: str) -> tuple[str | None, str | No
     for country_lower, country_proper in _WORLD_COUNTRIES_SORTED:
         if re.search(r"\b" + re.escape(country_lower) + r"\b", text_lower):
             if country_lower == "nigeria":
-                break   # fall through to state extraction
+                break  # fall through to state extraction
             found_countries.append((country_lower, country_proper))
     if found_countries:
         # Prefer sovereign over territory when both present
-        sovereign = [(cl, cp) for cl, cp in found_countries if cl not in _TERRITORY_NAMES]
+        sovereign = [
+            (cl, cp) for cl, cp in found_countries if cl not in _TERRITORY_NAMES
+        ]
         best = sovereign[0] if sovereign else found_countries[0]
         return None, best[1]
 
@@ -1485,9 +1930,9 @@ def _extract_state_country_from_row(combined: str) -> tuple[str | None, str | No
         state = _NG_STATES.get(raw_match)
         if not state:
             continue
-        after = text_lower[m.end():].strip().lstrip(",. |")
+        after = text_lower[m.end() :].strip().lstrip(",. |")
         if _STREET_WORDS_RE.match(after):
-            continue   # "Kano Street" is not Kano state
+            continue  # "Kano Street" is not Kano state
         # Also skip if followed by "word + expressway/road/street"
         # e.g. "LAGOS IBADAN EXPRESSWAY" — Lagos here is part of a road name
         _COMPOUND_ROAD_RE = re.compile(
@@ -1499,9 +1944,27 @@ def _extract_state_country_from_row(combined: str) -> tuple[str | None, str | No
         return state, "Nigeria"
 
     # --- Pass 2: city → Nigerian state lookup ---
-    _STREET_SUFFIXES = {"street", "road", "avenue", "close", "lane", "way", "crescent",
-                        "drive", "place", "court", "boulevard", "expressway", "bypass",
-                        "highway", "freeway", "motorway", "str", "rd", "express"}
+    _STREET_SUFFIXES = {
+        "street",
+        "road",
+        "avenue",
+        "close",
+        "lane",
+        "way",
+        "crescent",
+        "drive",
+        "place",
+        "court",
+        "boulevard",
+        "expressway",
+        "bypass",
+        "highway",
+        "freeway",
+        "motorway",
+        "str",
+        "rd",
+        "express",
+    }
     tokens = re.split(r"[,|\s]+", text_lower.rstrip("."))
     tokens = [t for t in tokens if t]
 
@@ -1531,13 +1994,14 @@ def _strip_odoo_prefix(val: Any) -> Any:
     if not isinstance(val, str):
         return val
     if val.startswith("__export__"):
-        return None    # discard internal IDs entirely – not useful in imports
+        return None  # discard internal IDs entirely – not useful in imports
     return val.strip()
 
 
 # ===========================================================================
 # 5. AI ADDRESS PARSER  –  batch LLM call for unstructured address strings
 # ===========================================================================
+
 
 def ai_parse_addresses(
     addresses: list[str],
@@ -1550,26 +2014,58 @@ def ai_parse_addresses(
 
     Batches calls to keep cost low and avoid timeouts.
     """
-    results: list[dict] = []
-    empty = {"street": None, "street2": None, "city": None,
-             "state": None, "zip": None, "country": None}
+    empty = {
+        "street": None,
+        "street2": None,
+        "city": None,
+        "state": None,
+        "zip": None,
+        "country": None,
+    }
+    if batch_size < 1:
+        raise ValueError("Address batch size must be at least 1")
 
-    for i in range(0, len(addresses), batch_size):
-        batch = addresses[i : i + batch_size]
+    # Repeated addresses do not need repeated AI calls, and blank values have
+    # nothing for the model to parse. Keep one result per distinct non-empty
+    # address, then expand back to the original row order below.
+    normalized_addresses = [
+        address.strip() if isinstance(address, str) else "" for address in addresses
+    ]
+    unique_addresses = list(
+        dict.fromkeys(address for address in normalized_addresses if address)
+    )
+    request_count = (len(unique_addresses) + batch_size - 1) // batch_size
+    logger.info(
+        "AI address parsing: %d rows, %d unique non-empty addresses, %d provider requests at batch size %d",
+        len(addresses),
+        len(unique_addresses),
+        request_count,
+        batch_size,
+    )
+    parsed_by_address: dict[str, dict] = {}
+
+    for i in range(0, len(unique_addresses), batch_size):
+        batch = unique_addresses[i : i + batch_size]
         parsed = _ai_address_batch(batch, client)
-        results.extend(parsed)
-        if i + batch_size < len(addresses):
-            time.sleep(0.3)   # light rate-limit courtesy pause
+        parsed_by_address.update(zip(batch, parsed))
+        if i + batch_size < len(unique_addresses):
+            time.sleep(0.3)  # light rate-limit courtesy pause
 
-    # Safety: ensure list length matches input
-    while len(results) < len(addresses):
-        results.append(empty.copy())
-    return results
+    # Preserve the input row order and length, including blank addresses.
+    return [
+        parsed_by_address.get(address, empty.copy()) for address in normalized_addresses
+    ]
 
 
 def _ai_address_batch(batch: list[str], client: anthropic.Anthropic) -> list[dict]:
-    empty = {"street": None, "street2": None, "city": None,
-             "state": None, "zip": None, "country": None}
+    empty = {
+        "street": None,
+        "street2": None,
+        "city": None,
+        "state": None,
+        "zip": None,
+        "country": None,
+    }
 
     numbered = {str(i): addr for i, addr in enumerate(batch)}
 
@@ -1613,13 +2109,20 @@ Return ONLY the JSON object. No prose, no markdown.
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            raw_text = _complete_with_fallback(client, system_prompt, user_prompt, max_tokens=1500)
-            raw_text = re.sub(r"^```[a-z]*\n?|```$", "", raw_text, flags=re.MULTILINE).strip()
+            raw_text = _complete_with_fallback(
+                client,
+                system_prompt,
+                user_prompt,
+                max_tokens=max(1500, len(batch) * 60),
+            )
+            raw_text = re.sub(
+                r"^```[a-z]*\n?|```$", "", raw_text, flags=re.MULTILINE
+            ).strip()
             parsed_map: dict[str, dict] = json.loads(raw_text)
             return [parsed_map.get(str(i), empty.copy()) for i in range(len(batch))]
         except (json.JSONDecodeError, _LLMUnavailable) as exc:
             logger.warning("Address batch attempt %d failed: %s", attempt + 1, exc)
-            time.sleep(2 ** attempt)
+            time.sleep(2**attempt)
 
     return [empty.copy() for _ in batch]
 
@@ -1628,8 +2131,9 @@ Return ONLY the JSON object. No prose, no markdown.
 # 5b. AI COUNTRY / STATE RESOLVER  –  fallback for rows rule-based can't resolve
 # ===========================================================================
 
+
 def ai_resolve_country_state(
-    rows: list[dict],          # list of {idx, combined_address} dicts
+    rows: list[dict],  # list of {idx, combined_address} dicts
     client: anthropic.Anthropic,
     batch_size: int = 30,
 ) -> dict[int, dict]:
@@ -1699,13 +2203,19 @@ Return ONLY the JSON object.
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            raw_text = _complete_with_fallback(client, system_prompt, user_prompt, max_tokens=1000)
-            raw_text = re.sub(r"^```[a-z]*\n?|```$", "", raw_text, flags=re.MULTILINE).strip()
+            raw_text = _complete_with_fallback(
+                client, system_prompt, user_prompt, max_tokens=1000
+            )
+            raw_text = re.sub(
+                r"^```[a-z]*\n?|```$", "", raw_text, flags=re.MULTILINE
+            ).strip()
             parsed: dict[str, dict] = json.loads(raw_text)
             return {r["idx"]: parsed.get(str(r["idx"]), empty.copy()) for r in rows}
         except (json.JSONDecodeError, _LLMUnavailable) as exc:
-            logger.warning("AI country/state batch attempt %d failed: %s", attempt + 1, exc)
-            time.sleep(2 ** attempt)
+            logger.warning(
+                "AI country/state batch attempt %d failed: %s", attempt + 1, exc
+            )
+            time.sleep(2**attempt)
 
     return {r["idx"]: empty.copy() for r in rows}
 
@@ -1713,6 +2223,7 @@ Return ONLY the JSON object.
 # ===========================================================================
 # 5c. AI FIELD-LEVEL CLEANER  –  fixes cross-contaminated fields
 # ===========================================================================
+
 
 def ai_clean_flagged_fields(
     df: pd.DataFrame,
@@ -1745,9 +2256,11 @@ def ai_clean_flagged_fields(
         if not unique_vals:
             continue
 
-        logger.info("AI field clean: '%s' — %d unique values to check", field, len(unique_vals))
+        logger.info(
+            "AI field clean: '%s' — %d unique values to check", field, len(unique_vals)
+        )
 
-        # Batch the unique values
+        # Batch all unique values from each flagged field so AI reviews each one.
         corrections: dict[str, str | None] = {}
         for i in range(0, len(unique_vals), batch_size):
             batch = unique_vals[i : i + batch_size]
@@ -1757,8 +2270,10 @@ def ai_clean_flagged_fields(
                 time.sleep(0.3)
 
         # Apply corrections back to DataFrame
-        df[field] = df[field].astype(str).map(
-            lambda v: corrections.get(v, v) if pd.notna(v) and v.strip() else v
+        df[field] = (
+            df[field]
+            .astype(str)
+            .map(lambda v: corrections.get(v, v) if pd.notna(v) and v.strip() else v)
         )
         # Treat "None" string results as actual None
         df[field] = df[field].replace({"None": None, "nan": None, "": None})
@@ -1799,7 +2314,9 @@ def _ai_field_clean_batch(
             "Normalise to the standard English country name."
         ),
     }
-    rule = _field_rules.get(field_name.lower(), "Clean the value — remove noise, fix obvious errors.")
+    rule = _field_rules.get(
+        field_name.lower(), "Clean the value — remove noise, fix obvious errors."
+    )
 
     system_prompt = (
         "You are a data cleaning specialist. "
@@ -1825,21 +2342,35 @@ Return ONLY the JSON object.
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            raw_text = _complete_with_fallback(client, system_prompt, user_prompt, max_tokens=1000)
-            raw_text = re.sub(r"^```[a-z]*\n?|```$", "", raw_text, flags=re.MULTILINE).strip()
+            raw_text = _complete_with_fallback(
+                client, system_prompt, user_prompt, max_tokens=1000
+            )
+            raw_text = re.sub(
+                r"^```[a-z]*\n?|```$", "", raw_text, flags=re.MULTILINE
+            ).strip()
             result: dict[str, str | None] = json.loads(raw_text)
-            return {str(k): (str(v) if v is not None else None) for k, v in result.items()}
+            return {
+                str(k): (str(v) if v is not None else None) for k, v in result.items()
+            }
         except (json.JSONDecodeError, _LLMUnavailable) as exc:
-            logger.warning("Field clean batch attempt %d failed for '%s': %s", attempt + 1, field_name, exc)
-            time.sleep(2 ** attempt)
+            logger.warning(
+                "Field clean batch attempt %d failed for '%s': %s",
+                attempt + 1,
+                field_name,
+                exc,
+            )
+            time.sleep(2**attempt)
 
-    logger.warning("Field clean failed for '%s' — returning values unchanged", field_name)
+    logger.warning(
+        "Field clean failed for '%s' — returning values unchanged", field_name
+    )
     return {v: v for v in values}
 
 
 # ===========================================================================
 # 6. COLUMN REMAPPER  –  apply AI mapping + fill defaults + reorder
 # ===========================================================================
+
 
 def apply_column_mapping(
     df: pd.DataFrame,
@@ -1848,6 +2379,7 @@ def apply_column_mapping(
     data_type: str,
     client: anthropic.Anthropic,
     flags: dict[str, list[str]] | None = None,
+    address_batch_size: int = 20,
 ) -> pd.DataFrame:
     """
     1. Rename raw columns to Odoo field names per AI mapping.
@@ -1873,11 +2405,11 @@ def apply_column_mapping(
     # are combined address strings needing splitting. We use that judgement directly
     # instead of a comma-counting heuristic that can't understand context.
     _addr_field_map = {
-        "street":  "Street",
+        "street": "Street",
         "street2": "Street2",
-        "city":    "City",
-        "state":   "State",
-        "zip":     "Zip",
+        "city": "City",
+        "state": "State",
+        "zip": "Zip",
         "country": "Country",
     }
     # Resolve flagged raw col names → their post-rename Odoo field names
@@ -1890,7 +2422,9 @@ def apply_column_mapping(
             needs_split_odoo.add(raw_col)
 
     if needs_split_odoo:
-        logger.info("AI address splitting flagged columns: %s", sorted(needs_split_odoo))
+        logger.info(
+            "AI address splitting flagged columns: %s", sorted(needs_split_odoo)
+        )
         # Build one combined address string per row from all flagged columns
         # (handles cases where address is split across two flagged columns)
         combined_addrs = (
@@ -1900,7 +2434,9 @@ def apply_column_mapping(
             .apply(lambda row: " | ".join(v.strip() for v in row if v.strip()), axis=1)
             .tolist()
         )
-        parsed = ai_parse_addresses(combined_addrs, client)
+        parsed = ai_parse_addresses(
+            combined_addrs, client, batch_size=address_batch_size
+        )
         addr_df = pd.DataFrame(parsed)
 
         for ai_key, odoo_field in _addr_field_map.items():
@@ -1932,9 +2468,15 @@ def apply_column_mapping(
                 # rows. Using .iloc + a positional boolean mask keeps everything
                 # aligned by position throughout, so the right address always
                 # lands on the right row.
-                mask = df[odoo_field].isna() | (df[odoo_field].astype(str).str.strip() == "")
-                positions = mask.to_numpy().nonzero()[0]   # positional indices where mask is True
-                df.iloc[positions, df.columns.get_loc(odoo_field)] = [parsed_vals[p] for p in positions]
+                mask = df[odoo_field].isna() | (
+                    df[odoo_field].astype(str).str.strip() == ""
+                )
+                positions = mask.to_numpy().nonzero()[
+                    0
+                ]  # positional indices where mask is True
+                df.iloc[positions, df.columns.get_loc(odoo_field)] = [
+                    parsed_vals[p] for p in positions
+                ]
 
         # Clear the original flagged columns — their content has been redistributed
         for col in needs_split_odoo:
@@ -1955,33 +2497,49 @@ def apply_column_mapping(
     # addresses where no country/city keyword was recognisable).
     # We collect only those rows, send them in one batched AI call, and fill the gaps.
     # Cost: typically 0–30 rows per file → 0–1 extra API calls.
-    _country_col = next((c for c in df.columns if c.lower() in ("country", "country_id")), None)
-    _state_col   = next((c for c in df.columns if c.lower() in ("state", "state_id")), None)
-    _addr_hint_keys = {"street", "street2", "city", "area", "location", "region",
-                       "district", "child_ids/street"}
-    _addr_text_cols = [c for c in df.columns
-                       if c.lower() in _addr_hint_keys
-                       or any(k in c.lower() for k in ("street", "address", "addr", "city"))
-                       and "type" not in c.lower()]
+    _country_col = next(
+        (c for c in df.columns if c.lower() in ("country", "country_id")), None
+    )
+    _state_col = next(
+        (c for c in df.columns if c.lower() in ("state", "state_id")), None
+    )
+    _addr_hint_keys = {
+        "street",
+        "street2",
+        "city",
+        "area",
+        "location",
+        "region",
+        "district",
+        "child_ids/street",
+    }
+    _addr_text_cols = [
+        c
+        for c in df.columns
+        if c.lower() in _addr_hint_keys
+        or any(k in c.lower() for k in ("street", "address", "addr", "city"))
+        and "type" not in c.lower()
+    ]
 
     _unresolved: list[dict] = []
     for idx, row in df.iterrows():
         country_blank = (
-            _country_col is None or
-            pd.isna(row.get(_country_col)) or
-            str(row.get(_country_col, "")).strip() in ("", "None")
+            _country_col is None
+            or pd.isna(row.get(_country_col))
+            or str(row.get(_country_col, "")).strip() in ("", "None")
         )
         state_blank = (
-            _state_col is None or
-            pd.isna(row.get(_state_col)) or
-            str(row.get(_state_col, "")).strip() in ("", "None")
+            _state_col is None
+            or pd.isna(row.get(_state_col))
+            or str(row.get(_state_col, "")).strip() in ("", "None")
         )
         if not (country_blank or state_blank):
-            continue   # already resolved — skip
+            continue  # already resolved — skip
 
         # Build combined address text from all address-type columns in this row
         parts = [
-            str(row[c]).strip() for c in _addr_text_cols
+            str(row[c]).strip()
+            for c in _addr_text_cols
             if isinstance(row.get(c), str)
             and row[c].strip()
             and row[c].strip().lower() not in ("false", "none", "nan")
@@ -1992,35 +2550,44 @@ def apply_column_mapping(
 
     if _unresolved:
         logger.info(
-            "AI country/state fallback: resolving %d unresolved rows …", len(_unresolved)
+            "AI country/state fallback: resolving %d unresolved rows …",
+            len(_unresolved),
         )
         ai_geo = ai_resolve_country_state(_unresolved, client)
 
         for item in _unresolved:
             idx = item["idx"]
             resolved = ai_geo.get(idx, {})
-            ai_state   = resolved.get("state")
+            ai_state = resolved.get("state")
             ai_country = resolved.get("country")
 
-            if _country_col and ai_country and (
-                pd.isna(df.at[idx, _country_col]) or
-                str(df.at[idx, _country_col]).strip() in ("", "None")
+            if (
+                _country_col
+                and ai_country
+                and (
+                    pd.isna(df.at[idx, _country_col])
+                    or str(df.at[idx, _country_col]).strip() in ("", "None")
+                )
             ):
                 df.at[idx, _country_col] = ai_country
 
-            if _state_col and ai_state and (
-                pd.isna(df.at[idx, _state_col]) or
-                str(df.at[idx, _state_col]).strip() in ("", "None")
+            if (
+                _state_col
+                and ai_state
+                and (
+                    pd.isna(df.at[idx, _state_col])
+                    or str(df.at[idx, _state_col]).strip() in ("", "None")
+                )
             ):
                 df.at[idx, _state_col] = ai_state
 
         resolved_count = sum(
-            1 for item in _unresolved
-            if ai_geo.get(item["idx"], {}).get("country")
+            1 for item in _unresolved if ai_geo.get(item["idx"], {}).get("country")
         )
         logger.info(
             "AI country/state fallback: resolved %d/%d rows",
-            resolved_count, len(_unresolved)
+            resolved_count,
+            len(_unresolved),
         )
 
         # --- Cache newly learned city → state mappings ---
@@ -2030,15 +2597,15 @@ def apply_column_mapping(
         new_entries: dict[str, str] = {}
         for item in _unresolved:
             resolved = ai_geo.get(item["idx"], {})
-            ai_city  = resolved.get("city")
+            ai_city = resolved.get("city")
             ai_state = resolved.get("state")
-            ai_ctry  = resolved.get("country")
+            ai_ctry = resolved.get("country")
             # Only cache Nigerian city→state (that's what our lookup table covers)
             if ai_city and ai_state and ai_ctry == "Nigeria":
                 city_key = ai_city.strip().lower()
                 if city_key and city_key not in _CITY_TO_STATE:
                     new_entries[city_key] = ai_state
-                    _CITY_TO_STATE[city_key] = ai_state   # live update for this run too
+                    _CITY_TO_STATE[city_key] = ai_state  # live update for this run too
 
         if new_entries:
             # Merge into the on-disk cache
@@ -2053,13 +2620,21 @@ def apply_column_mapping(
             _save_city_cache(existing_cache)
             logger.info(
                 "City cache: added %d new entries %s",
-                len(new_entries), list(new_entries.items())[:5]
+                len(new_entries),
+                list(new_entries.items())[:5],
             )
 
     # --- Step 3: Drop unmapped / unknown columns ---
     known_cols = set(schema.keys())
     cols_to_keep = [c for c in df.columns if c in known_cols]
     df = df[cols_to_keep].copy()
+
+    # Infer customer company status before schema defaults add a False value.
+    # A source-provided "Is a Company" column is preserved as-is; inference is
+    # only used when that field was absent from the mapped source data.
+    if data_type == "customer" and "Is a Company" not in df.columns and "Name" in df.columns:
+        df["Is a Company"] = df["Name"].apply(infer_is_company)
+        logger.info("Inferred 'Is a Company' from mapped customer names")
 
     # --- Step 4: Add missing schema columns with defaults ---
     for field, meta in schema.items():
@@ -2174,18 +2749,24 @@ def detect_internal_entries(
             continue
         m = _INTERNAL_ENTRY_PATTERNS.search(name)
         if m:
-            flagged[pos] = f"Looks like an internal accounting entry (matched: '{m.group(0)}')"
+            flagged[pos] = (
+                f"Looks like an internal accounting entry (matched: '{m.group(0)}')"
+            )
 
     # --- Layer 2: discover this file's specific internal-entry vocabulary
     #     with ONE small call, then apply it as a free regex across all rows ---
     if client is not None:
-        remaining_positions = [p for p in range(len(names)) if p not in flagged and names.iloc[p].strip()]
+        remaining_positions = [
+            p for p in range(len(names)) if p not in flagged and names.iloc[p].strip()
+        ]
         if remaining_positions:
             sample = _sample_for_keyword_discovery(names, remaining_positions)
             discovered_terms = _ai_discover_internal_keywords(sample, client)
 
             if discovered_terms:
-                logger.info("Internal-entry keyword discovery found: %s", discovered_terms)
+                logger.info(
+                    "Internal-entry keyword discovery found: %s", discovered_terms
+                )
                 discovered_regex = re.compile(
                     r"\b(" + "|".join(re.escape(t) for t in discovered_terms) + r")\b",
                     re.IGNORECASE,
@@ -2199,10 +2780,14 @@ def detect_internal_entries(
                             f"(matched: '{m.group(0)}')"
                         )
             else:
-                logger.info("Internal-entry keyword discovery found nothing — file looks clean")
+                logger.info(
+                    "Internal-entry keyword discovery found nothing — file looks clean"
+                )
 
     if flagged:
-        logger.info("Internal-entry detection: %d rows flagged for review", len(flagged))
+        logger.info(
+            "Internal-entry detection: %d rows flagged for review", len(flagged)
+        )
     return flagged
 
 
@@ -2289,16 +2874,26 @@ Return ONLY the JSON object.
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            raw_text = _complete_with_fallback(client, system_prompt, user_prompt, max_tokens=500)
-            raw_text = re.sub(r"^```[a-z]*\n?|```$", "", raw_text, flags=re.MULTILINE).strip()
+            raw_text = _complete_with_fallback(
+                client, system_prompt, user_prompt, max_tokens=500
+            )
+            raw_text = re.sub(
+                r"^```[a-z]*\n?|```$", "", raw_text, flags=re.MULTILINE
+            ).strip()
             parsed = json.loads(raw_text)
             if not parsed.get("found_internal_entries"):
                 return []
-            keywords = [k.strip() for k in parsed.get("keywords", []) if k and k.strip()]
+            keywords = [
+                k.strip() for k in parsed.get("keywords", []) if k and k.strip()
+            ]
             return keywords
         except (json.JSONDecodeError, _LLMUnavailable) as exc:
-            logger.warning("Internal-entry keyword discovery attempt %d failed: %s", attempt + 1, exc)
-            time.sleep(2 ** attempt)
+            logger.warning(
+                "Internal-entry keyword discovery attempt %d failed: %s",
+                attempt + 1,
+                exc,
+            )
+            time.sleep(2**attempt)
 
     # On total failure, find nothing — never guess, just fall back to
     # whatever Layer 1's universal regex already caught.
@@ -2306,11 +2901,11 @@ Return ONLY the JSON object.
 
 
 # ===========================================================================
-# 7c. DUPLICATE DETECTOR
-#     Explicitly flags rows that look like the same real-world customer/vendor
-#     entered twice — e.g. "Chiaro Caffe-Lekki" and "Chiaro Caffe - Lekki" at
-#     the same address. Never merges or deletes anything; only tags rows with
-#     duplicate_of_row_<N> so a human confirms before either copy is removed.
+# 7c. DUPLICATE DETECTOR AND MERGER
+#     Confirms likely repeated customers/vendors, then uses the most complete
+#     confirmed row as the canonical record and fills its missing fields from
+#     the other copies. Extra source rows remain in Data and are flagged in
+#     Errors; Cleaned contains one merged record per confirmed duplicate group.
 #
 #     IMPORTANT: name similarity alone is NOT enough. Two different branches
 #     of the same chain (e.g. "Gusto Restaurant - Kano" vs "Gusto Restaurant
@@ -2318,6 +2913,7 @@ Return ONLY the JSON object.
 #     genuinely different customers. Address must also be checked before
 #     anything is flagged as a duplicate.
 # ===========================================================================
+
 
 def detect_duplicates(
     df: pd.DataFrame,
@@ -2377,7 +2973,10 @@ def detect_duplicates(
     if not candidate_groups:
         return flagged
 
-    logger.info("Duplicate detection: %d candidate name-collision groups found", len(candidate_groups))
+    logger.info(
+        "Duplicate detection: %d candidate name-collision groups found",
+        len(candidate_groups),
+    )
 
     # --- Stage 2: AI confirms using name + address together ---
     if address_col is None or address_col not in df.columns or client is None:
@@ -2392,15 +2991,14 @@ def detect_duplicates(
     # Build one AI request per candidate group (groups are almost always size 2,
     # occasionally 3 — batching multiple groups into one call keeps cost low)
     group_items = list(candidate_groups.items())
-    batch_size = 15   # groups per AI call, not rows — each group has 2-3 rows
+    batch_size = 15  # groups per AI call, not rows — each group has 2-3 rows
 
     for i in range(0, len(group_items), batch_size):
         batch = group_items[i : i + batch_size]
         batch_payload = {}
         for gi, (_, positions) in enumerate(batch):
             batch_payload[str(gi)] = [
-                {"name": names.iloc[p], "address": addresses.iloc[p]}
-                for p in positions
+                {"name": names.iloc[p], "address": addresses.iloc[p]} for p in positions
             ]
         ai_results = _ai_confirm_duplicates_batch(batch_payload, client)
 
@@ -2423,8 +3021,123 @@ def detect_duplicates(
             time.sleep(0.3)
 
     if flagged:
-        logger.info("Duplicate detection: %d rows flagged as duplicates of an earlier row", len(flagged))
+        logger.info(
+            "Duplicate detection: %d rows flagged as duplicates of an earlier row",
+            len(flagged),
+        )
     return flagged
+
+
+def _merge_confirmed_duplicates(
+    df: pd.DataFrame,
+    duplicate_flags: dict[int, dict],
+) -> tuple[pd.DataFrame, dict[int, dict]]:
+    """Merge each AI-confirmed duplicate group into its most complete row.
+
+    The full row set and order are preserved for the Data sheet. For each
+    confirmed group, one deterministic canonical row is selected by populated
+    field count (earliest row breaks ties), then blank/default fields are
+    filled from the other group members. Every non-canonical row remains
+    flagged and points to the canonical row.
+    """
+    if not duplicate_flags:
+        return df, {}
+
+    row_count = len(df)
+    parents = list(range(row_count))
+
+    def find_root(position: int) -> int:
+        while parents[position] != position:
+            parents[position] = parents[parents[position]]
+            position = parents[position]
+        return position
+
+    def union(left: int, right: int) -> None:
+        left_root = find_root(left)
+        right_root = find_root(right)
+        if left_root != right_root:
+            parents[right_root] = left_root
+
+    for duplicate_pos, info in duplicate_flags.items():
+        original_pos = info.get("duplicate_of")
+        if (
+            isinstance(duplicate_pos, int)
+            and isinstance(original_pos, int)
+            and 0 <= duplicate_pos < row_count
+            and 0 <= original_pos < row_count
+        ):
+            union(duplicate_pos, original_pos)
+
+    groups: dict[int, list[int]] = {}
+    for position in range(row_count):
+        groups.setdefault(find_root(position), []).append(position)
+    groups = {root: positions for root, positions in groups.items() if len(positions) > 1}
+
+    def is_blank_or_default(field: str, value: Any) -> bool:
+        if pd.isna(value):
+            return True
+        if isinstance(value, str) and value.strip().lower() in ("", "none", "nan", "<na>"):
+            return True
+        if field in ("Customer Rank", "Supplier Rank"):
+            try:
+                return float(value) == 1.0
+            except (TypeError, ValueError):
+                return False
+        if field == "Credit Limit":
+            try:
+                return float(value) == 0.0
+            except (TypeError, ValueError):
+                return False
+        return False
+
+    def completeness(position: int) -> int:
+        return sum(
+            not is_blank_or_default(field, df.iat[position, column_pos])
+            for column_pos, field in enumerate(df.columns)
+        )
+
+    merged_df = df.copy(deep=True)
+    merged_flags: dict[int, dict] = {}
+    merged_group_count = 0
+
+    for positions in groups.values():
+        if len(positions) < 2:
+            continue
+        # Most populated record wins; stable source order breaks ties.
+        canonical_pos = max(positions, key=lambda pos: (completeness(pos), -pos))
+        donors = sorted(
+            (pos for pos in positions if pos != canonical_pos),
+            key=lambda pos: (-completeness(pos), pos),
+        )
+
+        for column_pos, field in enumerate(merged_df.columns):
+            if not is_blank_or_default(field, merged_df.iat[canonical_pos, column_pos]):
+                continue
+            for donor_pos in donors:
+                donor_value = merged_df.iat[donor_pos, column_pos]
+                if not is_blank_or_default(field, donor_value):
+                    merged_df.iat[canonical_pos, column_pos] = donor_value
+                    break
+
+        canonical_excel_row = canonical_pos + 2
+        for duplicate_pos in positions:
+            if duplicate_pos == canonical_pos:
+                continue
+            merged_flags[duplicate_pos] = {
+                "duplicate_of": canonical_pos,
+                "reason": (
+                    f"Duplicate of row {canonical_excel_row}; fields were merged "
+                    "into the most complete record"
+                ),
+            }
+        merged_group_count += 1
+
+    logger.info(
+        "Duplicate merge: consolidated %d confirmed groups; flagged %d extra rows",
+        merged_group_count,
+        len(merged_flags),
+    )
+    return merged_df, merged_flags
 
 
 def _ai_confirm_duplicates_batch(
@@ -2471,13 +3184,19 @@ Return ONLY the JSON object.
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            raw_text = _complete_with_fallback(client, system_prompt, user_prompt, max_tokens=1500)
-            raw_text = re.sub(r"^```[a-z]*\n?|```$", "", raw_text, flags=re.MULTILINE).strip()
+            raw_text = _complete_with_fallback(
+                client, system_prompt, user_prompt, max_tokens=1500
+            )
+            raw_text = re.sub(
+                r"^```[a-z]*\n?|```$", "", raw_text, flags=re.MULTILINE
+            ).strip()
             parsed: dict[str, list[bool]] = json.loads(raw_text)
             return parsed
         except (json.JSONDecodeError, _LLMUnavailable) as exc:
-            logger.warning("Duplicate confirmation attempt %d failed: %s", attempt + 1, exc)
-            time.sleep(2 ** attempt)
+            logger.warning(
+                "Duplicate confirmation attempt %d failed: %s", attempt + 1, exc
+            )
+            time.sleep(2**attempt)
 
     # On total failure, flag nothing — never guess a real customer away.
     return {}
@@ -2496,6 +3215,7 @@ Return ONLY the JSON object.
 #     nothing is ever auto-corrected; flagged rows are routed to the error
 #     sheet for a human to confirm either direction.
 # ===========================================================================
+
 
 def detect_suspicious_is_company_flags(
     df: pd.DataFrame,
@@ -2542,14 +3262,18 @@ def detect_suspicious_is_company_flags(
         name = names.iloc[pos].strip()
         contact = contacts.iloc[pos].strip()
         if not name or not contact:
-            continue   # need both fields populated to compare them
+            continue  # need both fields populated to compare them
 
         same_value = _norm(name) == _norm(contact)
         if not same_value:
             continue
 
         is_company_val = is_company_vals.iloc[pos]
-        marked_true = is_company_val is True or str(is_company_val).strip().lower() in ("true", "1", "yes")
+        marked_true = is_company_val is True or str(is_company_val).strip().lower() in (
+            "true",
+            "1",
+            "yes",
+        )
         if not marked_true:
             continue
 
@@ -2577,8 +3301,9 @@ def validate_and_split(
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[int], dict[str, int]]:
     """
     Check every row for the mandatory field, for signs of being an internal
-    accounting/bookkeeping entry, for being a likely duplicate of an earlier
-    row, and for a suspicious "Is a Company" flag — but, unlike the old
+    accounting/bookkeeping entry, for being a likely duplicate of the
+    selected canonical row, and for a suspicious "Is a Company" flag — but,
+    unlike the old
     behavior, do NOT remove flagged rows from the main DataFrame. They stay
     in place (so the output file's row count always matches the input) and
     are instead flagged for the caller to highlight, each with a specific
@@ -2590,9 +3315,8 @@ def validate_and_split(
     so the breakdown numbers always sum to the total flagged count):
 
       1. "missing_mandatory_field" — Name / Vendor Name is blank.
-      2. "duplicate_of_row_N"      — looks like the same entity as an
-         earlier row (see detect_duplicates()). The reason string includes
-         which earlier row it duplicates.
+      2. "duplicate_of_row_N"      — confirmed duplicate consolidated into
+         the most complete canonical row. The reason identifies that row.
       3. "flagged_internal_entry" — looks like a bookkeeping/accounting
          line item rather than a real customer/vendor (see
          detect_internal_entries()).
@@ -2602,11 +3326,13 @@ def validate_and_split(
          — a common client data-entry mistake where an individual's name
          gets copy-pasted into both fields with the company flag left on.
 
-    None of these are ever auto-removed — every judgment call here can be
-    wrong, so a human always gets the final say via the error sheet.
+    No source rows are dropped from the Data sheet. Confirmed duplicate
+    groups are merged into one most-complete canonical row for Cleaned; the
+    other source rows remain flagged in Errors for review.
 
     Returns:
-      - df: the same DataFrame, unchanged (all rows, original order)
+      - df: all source rows in original order, with canonical duplicate rows
+        filled from their confirmed duplicate copies
       - error_df: just the flagged rows, with '_reason_code', '_errors'
         (human-readable text) and '_source_row' columns added
       - error_positions: 0-based *positional* row numbers (not pandas index
@@ -2618,16 +3344,22 @@ def validate_and_split(
         frontend as the structured stats response
     """
     mandatory = MANDATORY_FIELD[data_type]
-    name_col = mandatory   # "Name" for customers, "Vendor Name" for vendors
+    name_col = mandatory  # "Name" for customers, "Vendor Name" for vendors
     category_col = next((c for c in df.columns if c.lower() == "category"), None)
     address_col = next((c for c in df.columns if c.lower() == "street"), None)
-    contact_name_col = next((c for c in df.columns if c.lower() == "contacts / name"), None)
+    contact_name_col = next(
+        (c for c in df.columns if c.lower() == "contacts / name"), None
+    )
     is_company_col = next((c for c in df.columns if c.lower() == "is a company"), None)
 
-    # Run the advisory detectors once up front.
-    internal_flags = detect_internal_entries(df, name_col, category_col, client)
+    # Confirm duplicates, merge each confirmed group into its most complete
+    # row, then run row-level checks against the merged canonical values.
     duplicate_flags = detect_duplicates(df, name_col, address_col, client)
-    is_company_flags = detect_suspicious_is_company_flags(df, name_col, contact_name_col, is_company_col)
+    df, duplicate_flags = _merge_confirmed_duplicates(df, duplicate_flags)
+    internal_flags = detect_internal_entries(df, name_col, category_col, client)
+    is_company_flags = detect_suspicious_is_company_flags(
+        df, name_col, contact_name_col, is_company_col
+    )
 
     errors: list[dict] = []
     error_positions: list[int] = []
@@ -2649,10 +3381,10 @@ def validate_and_split(
             reason_code = "missing_mandatory_field"
             reason_text = f"Missing mandatory field: '{mandatory}'"
 
-        # Priority 2: duplicate of an earlier row
+        # Priority 2: duplicate of the selected canonical row
         elif pos in duplicate_flags:
             dup_of = duplicate_flags[pos]["duplicate_of"]
-            reason_code = f"duplicate_of_row_{dup_of + 2}"   # Excel row number
+            reason_code = f"duplicate_of_row_{dup_of + 2}"  # Excel row number
             reason_text = duplicate_flags[pos]["reason"]
 
         # Priority 3: internal accounting entry
@@ -2669,7 +3401,7 @@ def validate_and_split(
             err_row = row.to_dict()
             err_row["_reason_code"] = reason_code
             err_row["_errors"] = reason_text
-            err_row["_source_row"] = pos + 2   # Excel 1-indexed + header row
+            err_row["_source_row"] = pos + 2  # Excel 1-indexed + header row
             errors.append(err_row)
             error_positions.append(pos)
 
@@ -2684,7 +3416,8 @@ def validate_and_split(
         else:
             breakdown["clean"] += 1
 
-    error_df = pd.DataFrame(errors)
+    error_columns = [*df.columns, "_reason_code", "_errors", "_source_row"]
+    error_df = pd.DataFrame(errors, columns=error_columns)
 
     logger.info(
         "Validation breakdown: %s",
@@ -2731,9 +3464,10 @@ def _style_worksheet(ws, min_width: int = 8, max_width: int = 40) -> None:
 # 8. MAIN PIPELINE ORCHESTRATOR
 # ===========================================================================
 
+
 def process_file(
     input_path: str | Path,
-    data_type: str,                    # "customer" or "vendor"
+    data_type: str,  # "customer" or "vendor"
     output_path: str | Path | None = None,
     api_key: str | None = None,
     address_batch_size: int = 20,
@@ -2751,7 +3485,7 @@ def process_file(
                 "clean": int,               # rows that passed every check
                 "errors": int,               # total flagged rows (clean + errors == total)
                 "missing_mandatory_field": int,  # e.g. blank "Name" / "Vendor Name"
-                "duplicate_merged": int,         # flagged as same entity as an earlier row
+                "duplicate_merged": int,         # extra confirmed rows merged into a canonical record
                 "flagged_internal": int,         # looks like a bookkeeping entry, not a real customer
             }
         }
@@ -2764,7 +3498,9 @@ def process_file(
     """
     input_path = Path(input_path)
     if data_type not in SCHEMA_MAP:
-        raise ValueError(f"data_type must be 'customer' or 'vendor', got: {data_type!r}")
+        raise ValueError(
+            f"data_type must be 'customer' or 'vendor', got: {data_type!r}"
+        )
 
     schema = SCHEMA_MAP[data_type]
 
@@ -2779,13 +3515,20 @@ def process_file(
     # a transient rate limit before _complete_with_fallback() drops to the
     # lower-quality free OpenRouter model. Once those retries are exhausted,
     # the exception reaches our code and the fallback takes over.
-    client = anthropic.Anthropic(api_key=api_key, max_retries=ANTHROPIC_MAX_RETRIES)  # api_key=None → reads ANTHROPIC_API_KEY env var
+    client = anthropic.Anthropic(
+        api_key=api_key, max_retries=ANTHROPIC_MAX_RETRIES
+    )  # api_key=None → reads ANTHROPIC_API_KEY env var
 
     try:
         # 1. Load raw file, then normalise structure with AI if needed
+        stage_started = time.perf_counter()
         df_raw = load_raw_file(input_path)
         df_raw = ai_normalise_structure(df_raw, input_path, client)
         total_rows = len(df_raw)
+        logger.info(
+            "Pipeline stage 'load and structure' completed in %.2fs",
+            time.perf_counter() - stage_started,
+        )
 
         # 2. Get a few sample rows for AI context (avoid sending entire sheet)
         sample_rows = df_raw.head(5).to_dict(orient="records")
@@ -2795,6 +3538,7 @@ def process_file(
         #   - columns whose values are combined address strings needing AI splitting
         #   - Odoo fields whose values contain wrong data (names in phones, cities in state, etc.)
         logger.info("Running AI column mapping …")
+        stage_started = time.perf_counter()
         mapping, flags = ai_map_columns(
             raw_columns=list(df_raw.columns),
             target_schema=schema,
@@ -2802,21 +3546,70 @@ def process_file(
             client=client,
             sample_rows=sample_rows,
         )
+        logger.info(
+            "Pipeline stage 'column mapping' completed in %.2fs",
+            time.perf_counter() - stage_started,
+        )
         logger.info("Column mapping: %s", json.dumps(mapping, indent=2))
         logger.info("Quality flags: %s", json.dumps(flags, indent=2))
 
+        mapped_source_columns = [
+            source_col
+            for source_col, target_field in mapping.items()
+            if target_field in schema and source_col in df_raw.columns
+        ]
+        if not mapped_source_columns:
+            raise RuntimeError(
+                "AI column mapping did not map any source column to the selected Odoo schema. "
+                "No cleaned workbook was generated. Check the AI provider API key or source columns."
+            )
+
+        has_mapped_source_data = any(
+            pd.notna(value) and not (isinstance(value, str) and not value.strip())
+            for source_col in mapped_source_columns
+            for value in df_raw[source_col]
+        )
+        if not has_mapped_source_data:
+            raise RuntimeError(
+                "All source values mapped to Odoo fields are empty. "
+                "No cleaned workbook was generated."
+            )
+
         # 4. Rule-based Pandas cleaning (pre-rename for phone/email/name heuristics)
+        stage_started = time.perf_counter()
         df_clean = rule_based_clean(df_raw.copy(), data_type)
+        logger.info(
+            "Pipeline stage 'pre-mapping cleaning' completed in %.2fs",
+            time.perf_counter() - stage_started,
+        )
 
         # 5. Apply column mapping + AI-driven address splitting + field cleaning
-        df_mapped = apply_column_mapping(df_clean, mapping, schema, data_type, client, flags=flags)
+        stage_started = time.perf_counter()
+        df_mapped = apply_column_mapping(
+            df_clean,
+            mapping,
+            schema,
+            data_type,
+            client,
+            flags=flags,
+            address_batch_size=address_batch_size,
+        )
 
         # 6. Apply rule-based cleaning again on renamed columns for consistency
         df_mapped = rule_based_clean(df_mapped, data_type)
+        logger.info(
+            "Pipeline stage 'mapping and post-mapping cleaning' completed in %.2fs",
+            time.perf_counter() - stage_started,
+        )
 
         # 8. Validate (rows stay in place — failures are flagged, not removed)
+        stage_started = time.perf_counter()
         df_final, df_errors, error_positions, breakdown = validate_and_split(
             df_mapped, data_type, client=client
+        )
+        logger.info(
+            "Pipeline stage 'validation' completed in %.2fs",
+            time.perf_counter() - stage_started,
         )
         clean_count = breakdown["clean"]
 
@@ -2829,6 +3622,7 @@ def process_file(
         #    file nothing ever exposes for download, while still giving a
         #    straight-to-import sheet for the common case of "just give me
         #    the clean rows".
+        stage_started = time.perf_counter()
         error_position_set = set(error_positions)
         clean_mask = [i not in error_position_set for i in range(len(df_final))]
         df_cleaned = df_final.iloc[clean_mask]
@@ -2836,14 +3630,17 @@ def process_file(
         with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
             df_cleaned.to_excel(writer, sheet_name="Cleaned", index=False)
             df_final.to_excel(writer, sheet_name="Data", index=False)
-            if not df_errors.empty:
-                df_errors.to_excel(writer, sheet_name="Errors", index=False)
+            # Keep the Errors tab present on every output, even when it has
+            # headers only because validation found no rows to flag.
+            df_errors.to_excel(writer, sheet_name="Errors", index=False)
 
             if error_positions:
-                fill = PatternFill(start_color="FFC7CE", end_color="FFC7CE", fill_type="solid")
+                fill = PatternFill(
+                    start_color="FFC7CE", end_color="FFC7CE", fill_type="solid"
+                )
                 ws = writer.sheets["Data"]
                 for pos in error_positions:
-                    excel_row = pos + 2   # +1 for header, +1 for 1-indexing
+                    excel_row = pos + 2  # +1 for header, +1 for 1-indexing
                     for cell in ws[excel_row]:
                         cell.fill = fill
 
@@ -2852,6 +3649,10 @@ def process_file(
                     _style_worksheet(writer.sheets[sheet_name])
 
         logger.info("Output written to '%s'", output_path)
+        logger.info(
+            "Pipeline stage 'workbook writing' completed in %.2fs",
+            time.perf_counter() - stage_started,
+        )
 
         status = "success" if df_errors.empty else "partial"
 
@@ -2861,9 +3662,13 @@ def process_file(
         if breakdown["duplicate_merged"]:
             message_parts.append(f"{breakdown['duplicate_merged']} possible duplicates")
         if breakdown["missing_mandatory_field"]:
-            message_parts.append(f"{breakdown['missing_mandatory_field']} missing required fields")
+            message_parts.append(
+                f"{breakdown['missing_mandatory_field']} missing required fields"
+            )
         if breakdown["flagged_internal"]:
-            message_parts.append(f"{breakdown['flagged_internal']} flagged as internal entries")
+            message_parts.append(
+                f"{breakdown['flagged_internal']} flagged as internal entries"
+            )
         if breakdown["suspicious_is_company_flag"]:
             message_parts.append(
                 f"{breakdown['suspicious_is_company_flag']} with a suspicious 'Is a Company' value"
@@ -2910,11 +3715,20 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser(description="Odoo Data Migration Engine")
-    parser.add_argument("input",       help="Path to raw input file (.xlsx / .csv)")
-    parser.add_argument("data_type",   choices=["customer", "vendor"], help="Record type")
-    parser.add_argument("--output",    default=None, help="Output file path (optional)")
-    parser.add_argument("--api-key",   default=None, help="Anthropic API key (or set ANTHROPIC_API_KEY env var)")
-    parser.add_argument("--batch-size", type=int, default=20, help="Address parse batch size (default: 20)")
+    parser.add_argument("input", help="Path to raw input file (.xlsx / .csv)")
+    parser.add_argument("data_type", choices=["customer", "vendor"], help="Record type")
+    parser.add_argument("--output", default=None, help="Output file path (optional)")
+    parser.add_argument(
+        "--api-key",
+        default=None,
+        help="Anthropic API key (or set ANTHROPIC_API_KEY env var)",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=20,
+        help="Address parse batch size (default: 20)",
+    )
     args = parser.parse_args()
 
     result = process_file(
