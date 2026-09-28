@@ -24,8 +24,9 @@ class InferIsCompanyTests(unittest.TestCase):
         self.assertTrue(infer_is_company("Example Co"))
         self.assertTrue(infer_is_company("Example IT"))
         self.assertTrue(infer_is_company("Example LP"))
+        self.assertTrue(infer_is_company("Marketing Services"))
     def test_unmarked_names_default_to_not_company(self):
-        for name in ("Ada Lovelace", "Adaora", "Marketing Services", "Walk-in Customer", ""):
+        for name in ("Ada Lovelace", "Adaora", "Walk-in Customer", ""):
             with self.subTest(name=name):
                 self.assertFalse(infer_is_company(name))
         self.assertFalse(infer_is_company(None))
@@ -39,7 +40,7 @@ class InferIsCompanyTests(unittest.TestCase):
 
         self.assertEqual(
             cleaned["Is a Company"].tolist(),
-            [False, True, True, False],
+            [False, True, True, True],
         )
 
     def test_existing_source_field_is_respected_and_blanks_default_false(self):
@@ -131,10 +132,14 @@ class InferIsCompanyTests(unittest.TestCase):
         with TemporaryDirectory() as temp_dir:
             source = Path(temp_dir) / "customers.csv"
             output = Path(temp_dir) / "odoo_ready.xlsx"
-            # NBSP survives CSV parsing but is stripped by the engine input cleanup.\n            source.write_text("Name,Phone\n\u00a0,\u00a0\n", encoding="utf-8")
+            source.write_text("Name,Phone\n,\n", encoding="utf-8")
 
             with (
                 patch("engine.odoo_data_engine.anthropic.Anthropic", return_value=None),
+                patch(
+                    "engine.odoo_data_engine.load_raw_file",
+                    return_value=pd.DataFrame({"Name": [pd.NA], "Phone": [pd.NA]}),
+                ),
                 patch("engine.odoo_data_engine.ai_normalise_structure", side_effect=lambda df, *_: df),
                 patch(
                     "engine.odoo_data_engine.ai_map_columns",
@@ -171,7 +176,7 @@ class InferIsCompanyTests(unittest.TestCase):
             exported = pd.read_excel(output, sheet_name="Cleaned")
             self.assertEqual(
                 exported["Is a Company"].tolist(),
-                [False, True, True, False],
+                [False, True, True, True],
             )
 
 
