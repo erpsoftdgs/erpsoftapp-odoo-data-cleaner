@@ -56,6 +56,7 @@ async function getResponseErrorMessage(response: Response): Promise<string> {
   const body = await response.text();
   try {
     const payload = JSON.parse(body) as {
+
       error?: unknown;
       detail?: unknown;
       message?: unknown;
