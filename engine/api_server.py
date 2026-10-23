@@ -73,6 +73,7 @@ logger.info(
 async def clean_data(
     file: UploadFile = File(..., description="Raw spreadsheet (.xlsx or .csv)"),
     data_type: str = Form(..., description="'customer' or 'vendor'"),
+    version: str = Form(..., description="'v18', 'v19', or 'v20'"),
 ):
     """
     Accept a raw spreadsheet upload, run the full cleaning pipeline,
@@ -81,9 +82,13 @@ async def clean_data(
     Form fields:
       - file      : multipart file upload
       - data_type : 'customer' or 'vendor'
+      - version   : 'v18', 'v19', or 'v20'
     """
     if data_type not in ("customer", "vendor"):
         raise HTTPException(400, detail="data_type must be 'customer' or 'vendor'")
+
+    if version not in ("v18", "v19", "v20"):
+        raise HTTPException(400, detail="version must be 'v18', 'v19', or 'v20'")
 
     allowed_extensions = {".xlsx", ".xls", ".csv"}
     suffix = Path(file.filename or "").suffix.lower()
@@ -101,13 +106,23 @@ async def clean_data(
     finally:
         await file.close()
 
-    # Run pipeline
-    result = process_file(
-        input_path=input_path,
-        data_type=data_type,
-        output_path=output_path,
-        api_key=ANTHROPIC_API_KEY,
-    )
+    # Run pipeline, catching schema/version errors so the message
+    # reaches the frontend instead of a bare "Internal Server Error".
+    try:
+        result = process_file(
+            input_path=input_path,
+            data_type=data_type,
+            version=version,
+            output_path=output_path,
+            api_key=ANTHROPIC_API_KEY,
+        )
+    except ValueError as exc:
+        # Version / schema validation error (e.g. v18 not yet supported)
+        raise HTTPException(400, detail=str(exc))
+    except Exception as exc:
+        # Any other unexpected engine crash
+        logger.exception("Engine pipeline crashed: %s", exc)
+        raise HTTPException(500, detail=f"Processing failed: {str(exc)}")
 
     if result["status"] == "error":
         raise HTTPException(500, detail=result["message"])

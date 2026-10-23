@@ -5,7 +5,7 @@ Universal AI-powered cleaning and column-mapping pipeline.
 Converts arbitrary client spreadsheets into Odoo-ready import files.
 
 Author  : Senior Python / AI Data Engineer
-Version : 1.0.0
+Version : 1.1.0 (Added Version Routing)
 """
 
 from __future__ import annotations
@@ -34,6 +34,7 @@ if __package__:
         OPENROUTER_API_KEY,
         OPENROUTER_MODEL,
     )
+    from .schemas import SCHEMA_MAP, MANDATORY_FIELD, get_schema
 else:
     from config import (
         ANTHROPIC_MAX_RETRIES,
@@ -44,7 +45,7 @@ else:
         OPENROUTER_API_KEY,
         OPENROUTER_MODEL,
     )
-
+    from schemas import SCHEMA_MAP, MANDATORY_FIELD, get_schema
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -54,73 +55,6 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s – %(message)s",
 )
 logger = logging.getLogger("odoo_engine")
-
-
-# ===========================================================================
-# 1. ODOO TARGET SCHEMAS
-#    Defines every field the templates require, with metadata used for
-#    validation and default-filling.
-# ===========================================================================
-
-CUSTOMER_SCHEMA: dict[str, dict] = {
-    "Name": {"required": True, "default": None, "dtype": "str"},
-    "Job Position": {"required": False, "default": None, "dtype": "str"},
-    "Mobile": {"required": False, "default": None, "dtype": "str"},
-    "Phone": {"required": False, "default": None, "dtype": "str"},
-    "Email": {"required": False, "default": None, "dtype": "str"},
-    "Street": {"required": False, "default": None, "dtype": "str"},
-    "Street2": {"required": False, "default": None, "dtype": "str"},
-    "City": {"required": False, "default": None, "dtype": "str"},
-    "State": {"required": False, "default": None, "dtype": "str"},
-    "Zip": {"required": False, "default": None, "dtype": "str"},
-    "Country": {"required": False, "default": None, "dtype": "str"},
-    "Website": {"required": False, "default": None, "dtype": "str"},
-    "Is a Company": {"required": False, "default": False, "dtype": "bool"},
-    "Reference": {"required": False, "default": None, "dtype": "str"},
-    "Credit Limit": {"required": False, "default": 0, "dtype": "float"},
-    "Branch": {"required": False, "default": None, "dtype": "str"},
-    "Customer Rank": {"required": False, "default": 1, "dtype": "int"},
-    "Salesperson": {"required": False, "default": None, "dtype": "str"},
-    "Category": {"required": False, "default": None, "dtype": "str"},
-    "Sub Category": {"required": False, "default": None, "dtype": "str"},
-    "Note": {"required": False, "default": None, "dtype": "str"},
-    "Account Receivable": {"required": False, "default": None, "dtype": "str"},
-    "Account Payable": {"required": False, "default": None, "dtype": "str"},
-    "contacts / name": {"required": False, "default": None, "dtype": "str"},
-    "contacts / email": {"required": False, "default": None, "dtype": "str"},
-    "contacts / title": {"required": False, "default": None, "dtype": "str"},
-    "contacts / phone": {"required": False, "default": None, "dtype": "str"},
-    "contacts / mobile": {"required": False, "default": None, "dtype": "str"},
-    "contacts / Job Title": {"required": False, "default": None, "dtype": "str"},
-}
-
-VENDOR_SCHEMA: dict[str, dict] = {
-    "Vendor Name": {"required": True, "default": None, "dtype": "str"},
-    "Street": {"required": False, "default": None, "dtype": "str"},
-    "Street2": {"required": False, "default": None, "dtype": "str"},
-    "City": {"required": False, "default": None, "dtype": "str"},
-    "State": {"required": False, "default": None, "dtype": "str"},
-    "Zip": {"required": False, "default": None, "dtype": "str"},
-    "Country": {"required": False, "default": None, "dtype": "str"},
-    "Tax ID": {"required": False, "default": None, "dtype": "str"},
-    "Phone": {"required": False, "default": None, "dtype": "str"},
-    "Mobile": {"required": False, "default": None, "dtype": "str"},
-    "Email": {"required": False, "default": None, "dtype": "str"},
-    "Website": {"required": False, "default": None, "dtype": "str"},
-    "Reference": {"required": False, "default": None, "dtype": "str"},
-    "Supplier Rank": {"required": False, "default": 1, "dtype": "int"},
-    "Address Type": {"required": False, "default": None, "dtype": "str"},
-    "Tags": {"required": False, "default": None, "dtype": "str"},
-    "Contact/Name": {"required": False, "default": None, "dtype": "str"},
-    "Contact/Title": {"required": False, "default": None, "dtype": "str"},
-    "Contact/Job Position": {"required": False, "default": None, "dtype": "str"},
-    "Contact/Email": {"required": False, "default": None, "dtype": "str"},
-    "Contact/Phone": {"required": False, "default": None, "dtype": "str"},
-    "Contact/Mobile": {"required": False, "default": None, "dtype": "str"},
-}
-
-SCHEMA_MAP = {"customer": CUSTOMER_SCHEMA, "vendor": VENDOR_SCHEMA}
-MANDATORY_FIELD = {"customer": "Name", "vendor": "Vendor Name"}
 
 
 # ===========================================================================
@@ -149,9 +83,6 @@ def ai_normalise_structure(
     - Junk preamble     : title/logo rows before the real data starts
     - Mixed rows        : metadata/summary rows interspersed with data rows
     """
-    # ── Quick pre-check: is this already a standard flat table? ──
-    # Heuristic: if row 0 looks like a header (mostly string tokens, no repeating
-    # label patterns like "Name:", "A/C Ref:") → flat table, return as-is.
     if _is_flat_table(df):
         return df
 
@@ -160,9 +91,6 @@ def ai_normalise_structure(
         source_path.name,
     )
 
-    # Send a compact snapshot of the raw file to the AI:
-    # first 12 rows × all columns, serialised as a JSON array of arrays.
-    # 12 rows is enough to see the repeating pattern without blowing the token budget.
     snapshot_rows = min(12, len(df))
     snapshot = df.head(snapshot_rows).fillna("").astype(str).values.tolist()
 
@@ -287,22 +215,11 @@ Return ONLY the JSON object.
 
 
 def _is_flat_table(df: pd.DataFrame) -> bool:
-    """
-    Quick heuristic: does this DataFrame look like a standard flat table?
-    Returns True if it does (skip AI call), False if it needs AI analysis.
-
-    Signals of a NON-flat table:
-    - A label like "A/C Ref:", "Name:", "Tel:", "Code:" repeats many times in col 0
-      (block structure marker)
-    - More than 30% of rows in col 0 are blank (block structure or vertical)
-    - Col 0 row 0 is blank (preamble or vertical layout)
-    """
     if df.empty or len(df) < 3:
         return True
 
     col0 = df.iloc[:, 0].fillna("").astype(str).str.strip()
 
-    # Signal 1: repeating label pattern in col 0 (block structure)
     label_pattern = re.compile(
         r"^(a/c ref:?|name:|tel:?|code:?|ref:?|id:?|telephone|a/c ref)$", re.IGNORECASE
     )
@@ -310,13 +227,10 @@ def _is_flat_table(df: pd.DataFrame) -> bool:
     if label_count >= 3:
         return False
 
-    # Signal 2: >30% blank in col 0 (block or vertical)
     blank_count = sum(1 for v in col0 if not v)
     if blank_count / len(col0) > 0.30:
         return False
 
-    # Signal 3: first row looks like field labels not column headers
-    # (very short values, all different, look like "Name", "Phone" etc.)
     row0 = df.iloc[0].fillna("").astype(str).str.strip()
     if row0.iloc[0] == "" and df.shape[1] > 3:
         return False
@@ -329,10 +243,6 @@ def _execute_reshape_plan(
     plan: dict,
     source_path: Path,
 ) -> pd.DataFrame:
-    """
-    Execute the reshape plan returned by the AI.
-    Pure Pandas — no additional API calls.
-    """
     action = plan.get("reshape_plan", {}).get("action", "none")
 
     if action == "none":
@@ -340,11 +250,9 @@ def _execute_reshape_plan(
 
     rp = plan["reshape_plan"]
 
-    # ── BLOCK: multiple rows per record ──
     if action == "block_to_rows":
         return _reshape_block(df, rp)
 
-    # ── VERTICAL: transpose rows↔cols ──
     if action == "transpose":
         field_col = rp.get("field_name_col", 0)
         data_start = rp.get("data_start_col", 1)
@@ -359,11 +267,9 @@ def _execute_reshape_plan(
         )
         return transposed
 
-    # ── MULTI_HEADER: collapse header rows ──
     if action == "collapse_headers":
         header_rows = rp.get("header_rows", [0])
         data_start = rp.get("data_start_row", len(header_rows))
-        # Combine header rows by joining non-empty values
         combined_header = []
         for col_idx in range(df.shape[1]):
             parts = [
@@ -380,7 +286,6 @@ def _execute_reshape_plan(
         )
         return result
 
-    # ── PREAMBLE: skip junk rows before real data ──
     if action == "skip_preamble":
         header_row = rp.get("header_row", 0)
         data_start = rp.get("data_start_row", header_row + 1)
@@ -391,7 +296,6 @@ def _execute_reshape_plan(
         logger.info("Skipped preamble — %d data rows", len(result))
         return result
 
-    # ── MIXED: filter out non-data rows ──
     if action == "filter_rows":
         header_row = rp.get("header_row", 0)
         signal = rp.get("data_row_signal", {})
@@ -415,11 +319,6 @@ def _execute_reshape_plan(
 
 
 def _reshape_block(df: pd.DataFrame, rp: dict) -> pd.DataFrame:
-    """
-    Reshape a block-structured DataFrame where N raw rows = 1 record.
-    Uses the AI-provided field_map to extract each field from the correct
-    row offset and column within each block.
-    """
     signal_col = rp.get("record_start_signal", {}).get("col", 0)
     signal_val = rp.get("record_start_signal", {}).get("value", "")
     skip_rows = set(rp.get("skip_rows", []))
@@ -429,7 +328,6 @@ def _reshape_block(df: pd.DataFrame, rp: dict) -> pd.DataFrame:
         logger.warning("Block reshape: no field_map provided — returning raw")
         return df
 
-    # Find all block start indices
     block_starts = []
     for i in range(len(df)):
         if i in skip_rows:
@@ -446,7 +344,6 @@ def _reshape_block(df: pd.DataFrame, rp: dict) -> pd.DataFrame:
         )
         return df
 
-    # Extract each block into a record
     records = []
     col_names = [f["field"] for f in field_map]
 
@@ -478,49 +375,14 @@ def _reshape_block(df: pd.DataFrame, rp: dict) -> pd.DataFrame:
 # ===========================================================================
 # 2b. LLM PROVIDER LAYER  –  Claude first, free OpenRouter model as fallback
 # ===========================================================================
-# The Anthropic free tier rate-limits hard (requests/minute AND tokens/day).
-# Rather than let a 429 stall or kill the run, every AI call in this module
-# goes through _complete_with_fallback(): the moment Anthropic returns a
-# rate-limit response, we re-send the SAME prompt to a free model on
-# OpenRouter (https://openrouter.ai – OpenAI-compatible REST API, no cost
-# for "...:free" models) instead of spinning and burning more Anthropic quota.
-#
-# Configure via environment variables:
-#   OPENROUTER_API_KEY  – your OpenRouter key (free signup at openrouter.ai/keys)
-#   OPENROUTER_MODEL    – defaults to a free Llama 3.3 70B slug; override with
-#                         any "...:free" model id from openrouter.ai/models
-#
-# Without OPENROUTER_API_KEY set, the fallback is a no-op and behaviour is
-# identical to before (Anthropic-only, with backoff/retry).
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-
-# Gemini sits between Claude and OpenRouter: better quality than OpenRouter's
-# free models, and (on the free Gemini tier) gemini-3.1-flash-lite gives a
-# much higher daily quota (500 RPD) than e.g. gemini-2.5-flash (20 RPD) — see
-# https://ai.dev/rate-limit for current per-model limits on your key.
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}"
-
-# How many times the Anthropic SDK retries a 429 internally before giving up
-# and letting _complete_with_fallback() switch to the fallback chain. Claude's
-# output quality is the best of the three, so it's worth a few quick SDK-level
-# retries first rather than dropping down on the very first rate-limit
-# response — but capped, so a sustained rate limit still fails over instead
-# of retrying forever.
-
-# Per-provider request pacing. RATE_LIMIT_RPM previously existed in .env but
-# was never actually read anywhere — every call fired as fast as the loop
-# could go, relying entirely on Anthropic's SDK retrying its own 429s. Each
-# provider in the fallback chain has a different real limit (Claude's free
-# tier is ~5 RPM; gemini-3.1-flash-lite's free tier is 15 RPM), so pacing them
-# all to one shared rate would throttle a faster fallback down to the
-# slowest provider's pace. Each gets its own independent minimum interval.
 
 _last_call_at: dict[str, float] = {}
 
 
 def _pace_call(provider: str, rpm: float) -> None:
-    """Block until at least 60/rpm seconds have passed since the last call to this provider."""
     if rpm <= 0:
         return
     min_interval = 60.0 / rpm
@@ -531,46 +393,27 @@ def _pace_call(provider: str, rpm: float) -> None:
 
 
 class _LLMUnavailable(Exception):
-    """Raised when neither Anthropic nor the OpenRouter fallback could complete a request."""
+    pass
 
 
 def _is_rate_limited(exc: anthropic.APIError) -> bool:
-    """True for HTTP 429 (rate-limit / quota-exceeded) responses — transient, worth retrying later."""
     if isinstance(exc, anthropic.RateLimitError):
         return True
     return getattr(exc, "status_code", None) == 429
 
 
 def _is_credits_exhausted(exc: anthropic.APIError) -> bool:
-    """
-    True for "credit balance too low" — comes back as a 400
-    invalid_request_error, not a 429, so status code alone won't catch it.
-    Unlike a rate limit, this won't clear up on its own (needs a human to add
-    billing), so the caller uses this to stop attempting Claude entirely for
-    the rest of the run instead of repeatedly paying the pacing wait only to
-    fail the same way every time.
-    """
     return "credit balance" in str(exc).lower()
 
 
 def _is_provider_unavailable_error(exc: anthropic.APIError) -> bool:
-    """
-    True for errors that mean Claude itself can't serve this request right
-    now (rate-limited, or out of credits) rather than the request being
-    malformed — these are worth falling back to Gemini/OpenRouter for,
-    since the same prompt would likely succeed elsewhere.
-    """
     return _is_rate_limited(exc) or _is_credits_exhausted(exc)
 
 
-# Set once a "credit balance too low" response is seen — skips Claude
-# entirely for the rest of this process's life instead of re-attempting (and
-# re-paying the pacing wait for) a call guaranteed to fail the same way again.
 _anthropic_credits_exhausted = False
 
 
 def _retry_after_seconds(exc: anthropic.APIError) -> float | None:
-    """Read the Retry-After header off a rate-limit error, if the SDK exposes it."""
     response = getattr(exc, "response", None)
     headers = getattr(response, "headers", None)
     value = headers.get("retry-after") if headers else None
@@ -583,11 +426,6 @@ def _retry_after_seconds(exc: anthropic.APIError) -> float | None:
 
 
 def _call_gemini(system_prompt: str, user_prompt: str, max_tokens: int) -> str | None:
-    """
-    Run the same prompt against Gemini.
-    Returns the raw response text, or None if Gemini is not configured or the
-    request fails for any reason (including the free tier being exhausted).
-    """
     if not GEMINI_API_KEY:
         return None
 
@@ -597,9 +435,6 @@ def _call_gemini(system_prompt: str, user_prompt: str, max_tokens: int) -> str |
             "contents": [{"parts": [{"text": user_prompt}]}],
             "generationConfig": {
                 "maxOutputTokens": max_tokens,
-                # Without this, Gemini 2.5+ "thinking" models can spend the whole
-                # max_tokens budget on internal reasoning and return no visible
-                # text at all (finishReason MAX_TOKENS, empty content parts).
                 "thinkingConfig": {"thinkingBudget": 0},
             },
         }
@@ -624,11 +459,6 @@ def _call_gemini(system_prompt: str, user_prompt: str, max_tokens: int) -> str |
 def _call_openrouter(
     system_prompt: str, user_prompt: str, max_tokens: int
 ) -> str | None:
-    """
-    Run the same prompt against a free model on OpenRouter.
-    Returns the raw response text, or None if OpenRouter is not configured
-    or the request fails for any reason.
-    """
     if not OPENROUTER_API_KEY:
         return None
 
@@ -667,21 +497,6 @@ def _complete_with_fallback(
     user_prompt: str,
     max_tokens: int,
 ) -> str:
-    """
-    Send one completion request to Claude.
-
-    When Claude itself is unavailable (rate-limited, or the account is out
-    of credits) falls through the chain Claude → Gemini → OpenRouter,
-    stopping at the first one that succeeds, instead of failing the request
-    outright. Once a "credit balance too low" response is seen, Claude is
-    skipped entirely for the rest of this run — that failure won't clear up
-    on its own, so there's no point re-paying the pacing wait to attempt (and
-    re-fail) it on every subsequent call.
-
-    Any other Anthropic error (a malformed request, say — one that would
-    fail identically on every provider) or an unconfigured/failed fallback
-    chain raises _LLMUnavailable so the caller's existing retry loop handles it.
-    """
     global _anthropic_credits_exhausted
     exc: anthropic.APIError | None = None
 
@@ -743,21 +558,15 @@ def _complete_with_fallback(
 
 
 # ===========================================================================
-# 2. FILE LOADER  –  handles .xlsx / .xls / .csv with auto-header detection
+# 2. FILE LOADER
 # ===========================================================================
 
 
 def load_raw_file(filepath: str | Path) -> pd.DataFrame:
-    """
-    Load a spreadsheet or CSV into a DataFrame.
-    Handles merged header rows (like CSS vendor data) by scanning the
-    first 5 rows to find the actual header row.
-    """
     path = Path(filepath)
     suffix = path.suffix.lower()
 
     if suffix in (".xlsx", ".xls", ".xlsm"):
-        # First pass: sniff which row looks like a header
         probe = pd.read_excel(path, header=None, nrows=10)
         header_row = _detect_header_row(probe)
         df = pd.read_excel(path, header=header_row, dtype=str)
@@ -768,9 +577,6 @@ def load_raw_file(filepath: str | Path) -> pd.DataFrame:
     else:
         raise ValueError(f"Unsupported file type: {suffix}")
 
-    # Treat whitespace-only cells as empty before dropping rows. Remove only
-    # rows with no data in any column; partially populated records stay in the
-    # DataFrame so validation can report their missing fields.
     df = df.replace(r"^\s*$", pd.NA, regex=True)
     rows_before_empty_drop = len(df)
     df.dropna(how="all", inplace=True)
@@ -781,11 +587,9 @@ def load_raw_file(filepath: str | Path) -> pd.DataFrame:
         )
     df.dropna(axis=1, how="all", inplace=True)
 
-    # Strip whitespace from column names and cell values
     df.columns = [str(c).strip() for c in df.columns]
     df = df.apply(lambda col: col.map(lambda x: x.strip() if isinstance(x, str) else x))
 
-    # Drop Pandas auto-generated "Unnamed" columns
     df = df.loc[:, ~df.columns.str.startswith("Unnamed")]
 
     logger.info(
@@ -799,10 +603,6 @@ def load_raw_file(filepath: str | Path) -> pd.DataFrame:
 
 
 def _detect_header_row(probe: pd.DataFrame) -> int:
-    """
-    Find the row index most likely to be a column header by counting
-    non-null, non-numeric string cells per row.
-    """
     best_row, best_score = 0, 0
     for i, row in probe.iterrows():
         score = sum(
@@ -818,7 +618,7 @@ def _detect_header_row(probe: pd.DataFrame) -> int:
 
 
 # ===========================================================================
-# 3. AI COLUMN MAPPER  –  one LLM call, structured JSON output
+# 3. AI COLUMN MAPPER
 # ===========================================================================
 
 
@@ -826,21 +626,10 @@ def ai_map_columns(
     raw_columns: list[str],
     target_schema: dict[str, dict],
     data_type: str,
+    version: str,  # <-- Added version parameter
     client: anthropic.Anthropic,
     sample_rows: list[dict] | None = None,
 ) -> tuple[dict[str, str | None], dict[str, list[str]]]:
-    """
-    Ask Claude to map raw column names → Odoo target column names, AND identify
-    columns that need additional AI processing (address splitting, field cleaning).
-
-    Returns:
-        (mapping, flags)
-        - mapping: { raw_col_name: odoo_field_name_or_None }
-        - flags:   {
-              "needs_address_split": [raw col names whose values combine street+city+state],
-              "needs_field_clean":   [odoo field names whose sample values look cross-contaminated]
-          }
-    """
     target_fields = list(target_schema.keys())
     sample_str = ""
     if sample_rows:
@@ -854,7 +643,7 @@ def ai_map_columns(
         "Your response must be a single JSON object."
     )
 
-    user_prompt = f"""Map the raw spreadsheet columns below to Odoo {data_type} import fields,
+    user_prompt = f"""Map the raw spreadsheet columns below to Odoo {version} {data_type} import fields,
 and flag any columns that need additional AI processing.
 
 RAW COLUMNS (from client spreadsheet):
@@ -938,47 +727,28 @@ Return a JSON object with EXACTLY this structure (no other keys):
 
 
 # ===========================================================================
-# 4. RULE-BASED PANDAS CLEANER  –  fast, deterministic, zero API cost
+# 4. RULE-BASED PANDAS CLEANER
 # ===========================================================================
 
-_PHONE_RE = re.compile(r"[^\d+]")  # strip non-digit / non-plus
+_PHONE_RE = re.compile(r"[^\d+]")
 _EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 
 
 def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
-    """
-    Apply deterministic Pandas transformations that never need LLM calls:
-    - Phone → numeric string, strip dashes/brackets/spaces
-    - Email → lowercase, validate format
-    - Name / Company → Title Case
-    - Boolean fields → True/False
-    - Country → extracted from any address column in the row; left blank only if no clue found
-    - Reference → strip internal Odoo export prefixes
-    - Credit Limit / Rank → numeric with sensible defaults
-    """
-    schema = SCHEMA_MAP[data_type]
+    schema = SCHEMA_MAP[data_type]["v19"]
 
-    # --- Name fields: Title Case ---
     name_cols = [
         c for c in df.columns if c.lower() in ("name", "vendor name", "company")
     ]
     for col in name_cols:
         df[col] = df[col].apply(_title_case)
 
-    # --- Phone / Mobile: clean all phone-like columns independently ---
-    # Both Phone and Mobile are preserved as separate Odoo fields.
-    # Raw "phone" -> "Phone" and raw "mobile" -> "Mobile" are kept distinct.
-    # If a field contains a person name instead of digits, _clean_phone returns None.
     phone_cols = [
         c for c in df.columns if any(k in c.lower() for k in ("phone", "mobile", "tel"))
     ]
     for col in phone_cols:
         df[col] = df[col].apply(_clean_phone)
 
-    # --- child_ids: rescue contact names hidden in boolean column ---
-    # In Odoo exports, child_ids is exported as False when no child contact exists.
-    # But sometimes the BA enters the contact person name directly in that cell
-    # (e.g. "TIMOTHY EKENE IKELUGO"). We detect this and move it to child_ids/name.
     if "child_ids" in df.columns:
         child_name_col = next(
             (
@@ -994,45 +764,36 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
             if not isinstance(val, str):
                 return row
             v = val.strip()
-            # "False" / empty / purely numeric = real Odoo boolean export, ignore
             if v.lower() in ("false", "true", "", "0", "1") or re.fullmatch(r"\d+", v):
                 return row
-            # Looks like an actual name: move it to child_ids/name if that cell is empty
             if child_name_col and (
                 pd.isna(row.get(child_name_col))
                 or str(row.get(child_name_col, "")).strip() == ""
             ):
                 row = row.copy()
                 row[child_name_col] = v.title()
-            row["child_ids"] = None  # clear the mis-used cell
+            row["child_ids"] = None
             return row
 
         if child_name_col:
             df = df.apply(_rescue_child_id, axis=1)
             logger.info("Rescued child_ids contact names into '%s'", child_name_col)
-        # Drop the raw child_ids column — it is not an Odoo import field
         df.drop(columns=["child_ids"], inplace=True, errors="ignore")
 
-    # --- Email: lowercase + validate ---
     email_cols = [
         c for c in df.columns if "email" in c.lower() or "e-mail" in c.lower()
     ]
     for col in email_cols:
         df[col] = df[col].apply(_clean_email)
 
-    # --- Website: lowercase ---
     web_cols = [c for c in df.columns if "website" in c.lower() or "web" in c.lower()]
     for col in web_cols:
         df[col] = df[col].apply(lambda x: x.lower() if isinstance(x, str) else x)
 
-    # --- Is a Company: coerce to boolean if column exists ---
     company_cols = [c for c in df.columns if "is a company" in c.lower()]
     for col in company_cols:
         df[col] = df[col].apply(_coerce_bool)
 
-    # --- Is a Company: INFER from name when column is absent ---
-    # This handles files like FZR raw data that have no Is a Company column.
-    # We look for the name column and derive the boolean from the name value.
     if data_type == "customer" and not company_cols:
         name_col = next(
             (
@@ -1046,7 +807,6 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
             df["Is a Company"] = df[name_col].apply(infer_is_company)
             logger.info("Inferred 'Is a Company' from '%s' column", name_col)
 
-    # --- state_id / country_id: strip Odoo export artifacts (value = "False") ---
     for col in df.columns:
         if col.lower() in ("state_id", "state", "country_id", "country"):
             df[col] = df[col].apply(
@@ -1060,14 +820,6 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
                 )
             )
 
-    # --- state / country: scan the ENTIRE ROW for location clues ---
-    # Country (and state) can appear anywhere in a row — in the street field,
-    # in a city field, or even as the sole value in an address column.
-    # e.g. street = "Hubei Province, Baoding City, China"
-    #      street = "India"  (entire value is just the country name)
-    #      street = "40 KAYODE STREET OGBA IKEJA LAGOS STATE Nigeria"
-    # We scan ALL address-like columns on each row, concatenate their text,
-    # and run the extraction once on the full combined string.
     country_col = next(
         (c for c in df.columns if c.lower() in ("country_id", "country")), None
     )
@@ -1075,7 +827,6 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
         (c for c in df.columns if c.lower() in ("state_id", "state")), None
     )
 
-    # Columns that might carry address text in any client file
     _ADDR_HINTS = {
         "street",
         "street2",
@@ -1098,7 +849,7 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
             c.lower() in _ADDR_HINTS
             or any(k in c.lower() for k in ("street", "address", "addr", "city"))
         )
-        and "type" not in c.lower()  # exclude "Address Type" column
+        and "type" not in c.lower()
         and "address type" not in c.lower()
     ]
 
@@ -1115,7 +866,6 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
         if not (state_missing or country_missing):
             continue
 
-        # Build one combined text string from every address-bearing column in this row
         parts = []
         for col in addr_cols:
             v = row.get(col, "")
@@ -1125,7 +875,7 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
                 and v.strip().lower() not in ("false", "none", "nan")
             ):
                 parts.append(v.strip())
-        combined = " | ".join(parts)  # separator keeps city tokens distinct
+        combined = " | ".join(parts)
 
         if not combined.strip():
             continue
@@ -1137,20 +887,17 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
         if country_missing and country_found and country_col:
             df.at[idx, country_col] = country_found
 
-    # --- Reference: strip Odoo internal export prefix ---
     ref_cols = [c for c in df.columns if c.lower() in ("reference", "ref")]
     for col in ref_cols:
         df[col] = df[col].apply(_strip_odoo_prefix)
 
-    # --- Credit Limit / Rank: numeric ---
     for col in df.columns:
-        schema_key = col  # already renamed by this point
+        schema_key = col
         if schema_key in schema and schema[schema_key]["dtype"] in ("float", "int"):
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(
                 schema[schema_key]["default"] or 0
             )
 
-    # --- Zip: force string (avoid float '110001.0') ---
     zip_cols = [c for c in df.columns if c.lower() in ("zip", "postal", "zip code")]
     for col in zip_cols:
         df[col] = df[col].apply(
@@ -1161,14 +908,6 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
             )
         )
 
-    # --- Account Receivable: derive from Category (FZR-style files) ---
-    # This is a fixed business rule observed in your cleaned FZR data:
-    #   Horeca       → 112002 Horeca Receivables
-    #   Retail       → 112003 Retail Receivables
-    #   Distributor  → 112001 Distributors Receivables
-    #   Others       → 112005 Other Receivables
-    #   Not Sales    → 112006 Related Party Receivables
-    # Only fills blank cells — never overwrites a value already present.
     _AR_MAP = {
         "horeca": "112002 Horeca Receivables",
         "retail": "112003 Retail Receivables",
@@ -1189,9 +928,6 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
             )
         )
 
-    # --- Note: derive from Branch column when Note is absent ---
-    # In FZR raw data, "Branch" contains values like "Office Lagos", "Dave : SP"
-    # which your BAs copy into the Note field.
     branch_col = next((c for c in df.columns if c.lower() == "branch"), None)
     note_col = next((c for c in df.columns if c.lower() == "note"), None)
     if branch_col and data_type == "customer":
@@ -1201,14 +937,6 @@ def rule_based_clean(df: pd.DataFrame, data_type: str) -> pd.DataFrame:
         mask = df[note_col].isna() | (df[note_col].astype(str).str.strip() == "")
         df.loc[mask, note_col] = df.loc[mask, branch_col]
 
-    # --- State: final normalization pass ---
-    # Runs after every step that can populate this column (rule-based
-    # extraction above, plus — by the time this function's second call
-    # happens, post-mapping — AI address splitting, the AI country/state
-    # fallback, and AI field cleaning, all of which can produce a verbose
-    # synonym like "Federal Capital Territory" instead of "FCT"). Safe
-    # no-op on the first call (pre-mapping), since the State column won't
-    # exist under its mapped name yet.
     _final_state_col = next(
         (c for c in df.columns if c.lower() in ("state", "state_id")), None
     )
@@ -1231,7 +959,6 @@ def _clean_phone(val: Any) -> Any:
     if not isinstance(val, str) or not val.strip():
         return val
     stripped = val.strip()
-    # Preserve leading + for international format, then remove all non-digits
     has_plus = stripped.startswith("+")
     digits = re.sub(r"\D", "", stripped)
     return ("+" if has_plus else "") + digits if digits else None
@@ -1257,114 +984,24 @@ def _coerce_bool(val: Any) -> bool:
     return False
 
 
-# Corporate keywords that strongly indicate a business entity
 _COMPANY_KEYWORDS = {
-    "ltd",
-    "limited",
-    "co.",
-    "co,",
-    "plc",
-    "inc",
-    "corp",
-    "corporation",
-    "llc",
-    "llp",
-    "nig",
-    "nigeria",
-    "ent",
-    "enterprises",
-    "enterprise",
-    "int",
-    "international",
-    "services",
-    "service",
-    "solutions",
-    "solution",
-    "group",
-    "associates",
-    "association",
-    "holdings",
-    "holding",
-    "industries",
-    "industry",
-    "production",
-    "productions",
-    "manufacturing",
-    "trading",
-    "logistics",
-    "consulting",
-    "consultancy",
-    "technologies",
-    "technology",
-    "systems",
-    "global",
-    "agency",
-    "agencies",
-    "pharmaceuticals",
-    "pharmaceutical",
-    "pharmacy",
-    "healthcare",
-    "hospital",
-    "clinic",
-    "medical",
-    "surgical",
-    "laboratory",
-    "labs",
-    "publishing",
-    "publishers",
-    "media",
-    "communications",
-    "foundation",
-    "restaurant",
-    "supermarket",
-    "stores",
-    "store",
-    "market",
-    "bakery",
-    "hotel",
-    "suites",
-    "ventures",
-    "investment",
-    "investments",
-    "capital",
-    "properties",
-    "property",
-    "real estate",
-    "construction",
-    "contractors",
-    "supplies",
-    "supply",
-    "distribution",
-    "distributors",
-    "distributor",
-    "imports",
-    "exports",
-    "resources",
-    "management",
-    "academy",
-    "school",
-    "college",
-    "university",
-    "institute",
-    "church",
-    "ministry",
-    "agro",
-    "agriculture",
-    "agricultural",
-    "produce",
-    "farms",
-    "farm",
-    "integrated",
-    "nig.",
-    "and",
-    "sons",
-    "son",
-    "brothers",
-    "bro",
+    "ltd", "limited", "co.", "co,", "plc", "inc", "corp", "corporation", "llc", "llp",
+    "nig", "nigeria", "ent", "enterprises", "enterprise", "int", "international",
+    "services", "service", "solutions", "solution", "group", "associates", "association",
+    "holdings", "holding", "industries", "industry", "production", "productions",
+    "manufacturing", "trading", "logistics", "consulting", "consultancy", "technologies",
+    "technology", "systems", "global", "agency", "agencies", "pharmaceuticals",
+    "pharmaceutical", "pharmacy", "healthcare", "hospital", "clinic", "medical",
+    "surgical", "laboratory", "labs", "publishing", "publishers", "media",
+    "communications", "foundation", "restaurant", "supermarket", "stores", "store",
+    "market", "bakery", "hotel", "suites", "ventures", "investment", "investments",
+    "capital", "properties", "property", "real estate", "construction", "contractors",
+    "supplies", "supply", "distribution", "distributors", "distributor", "imports",
+    "exports", "resources", "management", "academy", "school", "college", "university",
+    "institute", "church", "ministry", "agro", "agriculture", "agricultural", "produce",
+    "farms", "farm", "integrated", "nig.", "and", "sons", "son", "brothers", "bro",
 }
 
-# Match complete words/phrases, not fragments inside personal names. Keep the
-# existing IT/LP markers, but ignore "and" alone because it is common in names.
 _NORMALIZED_COMPANY_KEYWORDS = {
     " ".join(re.findall(r"[a-z0-9]+", keyword.lower()))
     for keyword in _COMPANY_KEYWORDS
@@ -1376,7 +1013,6 @@ _COMPANY_KEYWORD_PATTERNS = tuple(
     for keyword in _NORMALIZED_COMPANY_KEYWORDS
 )
 
-# Internal/walk-in account patterns that are NOT real companies
 _INTERNAL_ACCOUNT_PATTERNS = re.compile(
     r"walk[\s\-]?in|walk in|cash sale|a\/c\b|debt recovery|"
     r"online customer|regulatory|nafdac sample|^sample$",
@@ -1385,10 +1021,6 @@ _INTERNAL_ACCOUNT_PATTERNS = re.compile(
 
 
 def infer_is_company(name: Any) -> bool:
-    """
-    Infer company status from legal suffixes and business terms in the name
-    when the source has no company flag. Personal names default to False.
-    """
     if not isinstance(name, str) or not name.strip():
         return False
 
@@ -1396,423 +1028,119 @@ def infer_is_company(name: Any) -> bool:
     return any(pattern.search(normalized_name) for pattern in _COMPANY_KEYWORD_PATTERNS)
 
 
-# ---------------------------------------------------------------------------
-# Nigerian state extraction from raw street strings
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# World country lookup  –  covers every country seen in your client files
-# plus the most common ones a future client might send.
-# Key = lowercase (for matching), Value = Odoo-expected proper name.
-# Sorted longest-first at build time so multi-word names match before substrings.
-# ---------------------------------------------------------------------------
 _WORLD_COUNTRIES: dict[str, str] = {
-    # Africa
-    "nigeria": "Nigeria",
-    "ghana": "Ghana",
-    "kenya": "Kenya",
-    "south africa": "South Africa",
-    "ethiopia": "Ethiopia",
-    "tanzania": "Tanzania",
-    "uganda": "Uganda",
-    "egypt": "Egypt",
-    "cameroon": "Cameroon",
-    "ivory coast": "Ivory Coast",
-    "cote d'ivoire": "Ivory Coast",
-    "senegal": "Senegal",
-    "mali": "Mali",
-    "angola": "Angola",
-    "mozambique": "Mozambique",
-    "zambia": "Zambia",
-    "zimbabwe": "Zimbabwe",
-    "rwanda": "Rwanda",
-    "botswana": "Botswana",
-    "namibia": "Namibia",
-    "benin": "Benin",
-    "togo": "Togo",
-    "niger": "Niger Republic",
-    "chad": "Chad",
-    "sudan": "Sudan",
-    "somalia": "Somalia",
-    "libya": "Libya",
-    "morocco": "Morocco",
-    "algeria": "Algeria",
-    "tunisia": "Tunisia",
-    # Europe
-    "united kingdom": "United Kingdom",
-    "england": "United Kingdom",
-    "scotland": "United Kingdom",
-    "wales": "United Kingdom",
-    "germany": "Germany",
-    "france": "France",
-    "italy": "Italy",
-    "spain": "Spain",
-    "portugal": "Portugal",
-    "netherlands": "Netherlands",
-    "belgium": "Belgium",
-    "switzerland": "Switzerland",
-    "austria": "Austria",
-    "sweden": "Sweden",
-    "norway": "Norway",
-    "denmark": "Denmark",
-    "finland": "Finland",
-    "poland": "Poland",
-    "czech republic": "Czech Republic",
-    "hungary": "Hungary",
-    "romania": "Romania",
-    "greece": "Greece",
-    "turkey": "Turkey",
-    "russia": "Russia",
-    "ukraine": "Ukraine",
-    "ireland": "Ireland",
-    # Americas
-    "united states": "United States",
-    "usa": "United States",
-    "u.s.a": "United States",
-    "u.s.a.": "United States",
-    "canada": "Canada",
-    "mexico": "Mexico",
-    "brazil": "Brazil",
-    "argentina": "Argentina",
-    "colombia": "Colombia",
-    "chile": "Chile",
-    "peru": "Peru",
-    "venezuela": "Venezuela",
-    # Asia
-    "china": "China",
-    "india": "India",
-    "japan": "Japan",
-    "south korea": "South Korea",
-    "indonesia": "Indonesia",
-    "pakistan": "Pakistan",
-    "bangladesh": "Bangladesh",
-    "vietnam": "Vietnam",
-    "thailand": "Thailand",
-    "malaysia": "Malaysia",
-    "singapore": "Singapore",
-    "philippines": "Philippines",
-    "hong kong": "Hong Kong",
-    "taiwan": "Taiwan",
-    "saudi arabia": "Saudi Arabia",
-    "uae": "United Arab Emirates",
-    "united arab emirates": "United Arab Emirates",
-    "dubai": "United Arab Emirates",
-    "israel": "Israel",
-    "iran": "Iran",
-    "iraq": "Iraq",
-    "jordan": "Jordan",
-    "lebanon": "Lebanon",
-    "qatar": "Qatar",
-    "kuwait": "Kuwait",
-    "bahrain": "Bahrain",
-    # Oceania
-    "australia": "Australia",
-    "new zealand": "New Zealand",
+    "nigeria": "Nigeria", "ghana": "Ghana", "kenya": "Kenya", "south africa": "South Africa",
+    "ethiopia": "Ethiopia", "tanzania": "Tanzania", "uganda": "Uganda", "egypt": "Egypt",
+    "cameroon": "Cameroon", "ivory coast": "Ivory Coast", "cote d'ivoire": "Ivory Coast",
+    "senegal": "Senegal", "mali": "Mali", "angola": "Angola", "mozambique": "Mozambique",
+    "zambia": "Zambia", "zimbabwe": "Zimbabwe", "rwanda": "Rwanda", "botswana": "Botswana",
+    "namibia": "Namibia", "benin": "Benin", "togo": "Togo", "niger": "Niger Republic",
+    "chad": "Chad", "sudan": "Sudan", "somalia": "Somalia", "libya": "Libya",
+    "morocco": "Morocco", "algeria": "Algeria", "tunisia": "Tunisia",
+    "united kingdom": "United Kingdom", "england": "United Kingdom", "scotland": "United Kingdom",
+    "wales": "United Kingdom", "germany": "Germany", "france": "France", "italy": "Italy",
+    "spain": "Spain", "portugal": "Portugal", "netherlands": "Netherlands", "belgium": "Belgium",
+    "switzerland": "Switzerland", "austria": "Austria", "sweden": "Sweden", "norway": "Norway",
+    "denmark": "Denmark", "finland": "Finland", "poland": "Poland", "czech republic": "Czech Republic",
+    "hungary": "Hungary", "romania": "Romania", "greece": "Greece", "turkey": "Turkey",
+    "russia": "Russia", "ukraine": "Ukraine", "ireland": "Ireland",
+    "united states": "United States", "usa": "United States", "u.s.a": "United States",
+    "u.s.a.": "United States", "canada": "Canada", "mexico": "Mexico", "brazil": "Brazil",
+    "argentina": "Argentina", "colombia": "Colombia", "chile": "Chile", "peru": "Peru",
+    "venezuela": "Venezuela", "china": "China", "india": "India", "japan": "Japan",
+    "south korea": "South Korea", "indonesia": "Indonesia", "pakistan": "Pakistan",
+    "bangladesh": "Bangladesh", "vietnam": "Vietnam", "thailand": "Thailand",
+    "malaysia": "Malaysia", "singapore": "Singapore", "philippines": "Philippines",
+    "hong kong": "Hong Kong", "taiwan": "Taiwan", "saudi arabia": "Saudi Arabia",
+    "uae": "United Arab Emirates", "united arab emirates": "United Arab Emirates",
+    "dubai": "United Arab Emirates", "israel": "Israel", "iran": "Iran", "iraq": "Iraq",
+    "jordan": "Jordan", "lebanon": "Lebanon", "qatar": "Qatar", "kuwait": "Kuwait",
+    "bahrain": "Bahrain", "australia": "Australia", "new zealand": "New Zealand",
 }
 
-# Pre-sort longest-first so "United Kingdom" matches before "United"
 _WORLD_COUNTRIES_SORTED: list[tuple[str, str]] = sorted(
     _WORLD_COUNTRIES.items(), key=lambda x: len(x[0]), reverse=True
 )
 
-# All 36 states + FCT, normalised to the exact spelling Odoo expects.
-# Built from every state value seen across all your cleaned client files.
 _NG_STATES: dict[str, str] = {
-    "abia": "Abia",
-    "adamawa": "Adamawa",
-    "akwa ibom": "Akwa Ibom",
-    "akwaibom": "Akwa Ibom",
-    "anambra": "Anambra",
-    "bauchi": "Bauchi",
-    "bayelsa": "Bayelsa",
-    "benue": "Benue",
-    "borno": "Borno",
-    "cross river": "Cross River",
-    "crossriver": "Cross River",
-    "delta": "Delta",
-    "ebonyi": "Ebonyi",
-    "edo": "Edo",
-    "ekiti": "Ekiti",
-    "enugu": "Enugu",
-    "fct": "FCT",
-    "federal capital territory": "FCT",
-    "abuja": "FCT",
-    "gombe": "Gombe",
-    "imo": "Imo",
-    "jigawa": "Jigawa",
-    "kaduna": "Kaduna",
-    "kano": "Kano",
-    "katsina": "Katsina",
-    "kebbi": "Kebbi",
-    "kogi": "Kogi",
-    "kwara": "Kwara",
-    "lagos": "Lagos",
-    "nasarawa": "Nasarawa",
-    "niger": "Niger",
-    "ogun": "Ogun",
-    "ondo": "Ondo",
-    "osun": "Osun",
-    "oyo": "Oyo",
-    "plateau": "Plateau",
-    "plateau state": "Plateau",
-    "rivers": "Rivers",
-    "sokoto": "Sokoto",
-    "taraba": "Taraba",
-    "yobe": "Yobe",
-    "zamfara": "Zamfara",
+    "abia": "Abia", "adamawa": "Adamawa", "akwa ibom": "Akwa Ibom", "akwaibom": "Akwa Ibom",
+    "anambra": "Anambra", "bauchi": "Bauchi", "bayelsa": "Bayelsa", "benue": "Benue",
+    "borno": "Borno", "cross river": "Cross River", "crossriver": "Cross River",
+    "delta": "Delta", "ebonyi": "Ebonyi", "edo": "Edo", "ekiti": "Ekiti", "enugu": "Enugu",
+    "fct": "FCT", "federal capital territory": "FCT", "abuja": "FCT", "gombe": "Gombe",
+    "imo": "Imo", "jigawa": "Jigawa", "kaduna": "Kaduna", "kano": "Kano", "katsina": "Katsina",
+    "kebbi": "Kebbi", "kogi": "Kogi", "kwara": "Kwara", "lagos": "Lagos", "nasarawa": "Nasarawa",
+    "niger": "Niger", "ogun": "Ogun", "ondo": "Ondo", "osun": "Osun", "oyo": "Oyo",
+    "plateau": "Plateau", "plateau state": "Plateau", "rivers": "Rivers", "sokoto": "Sokoto",
+    "taraba": "Taraba", "yobe": "Yobe", "zamfara": "Zamfara",
 }
 
-# City → State lookup: derived from every city/state pair in your cleaned files.
-# Covers ~200+ Nigerian cities/areas. Add more rows freely as new clients appear.
 _CITY_TO_STATE: dict[str, str] = {
-    "aba": "Abia",
-    "abakaliki": "Ebonyi",
-    "abeokuta": "Ogun",
-    "abuja": "FCT",
-    "abulado": "Lagos",
-    "abule ado": "Lagos",
-    "abule egba": "Lagos",
-    "abule iroko": "Ogun",
-    "abule odu": "Lagos",
-    "ado ekiti": "Ekiti",
-    "ado-ekiti": "Ekiti",
-    "agboju": "Lagos",
-    "agege": "Lagos",
-    "agidingbi": "Lagos",
-    "aguda": "Lagos",
-    "ajah": "Lagos",
-    "ajao estate": "Lagos",
-    "ajegunle": "Lagos",
-    "akoka": "Lagos",
-    "akure": "Ondo",
-    "akute": "Ogun",
-    "akwa": "Anambra",
-    "alagbado": "Lagos",
-    "alausa": "Lagos",
-    "allen": "Lagos",
-    "amuwo odofin": "Lagos",
-    "amuwo-odofin": "Lagos",
-    "anthony": "Lagos",
-    "anthony village": "Lagos",
-    "apapa": "Lagos",
-    "apete": "Oyo",
-    "apo": "FCT",
-    "apongbon": "Lagos",
-    "arepo": "Ogun",
-    "asaba": "Delta",
-    "asokoro": "FCT",
-    "auchi": "Edo",
-    "awkunanaw": "Enugu",
-    "awoyaya": "Lagos",
-    "badagry": "Lagos",
-    "badagery": "Lagos",
-    "badagary": "Lagos",
-    "bariga": "Lagos",
-    "bauchi": "Bauchi",
-    "benin": "Edo",
-    "benin city": "Edo",
-    "berger": "Lagos",
-    "bori": "Rivers",
-    "calabar": "Cross River",
-    "dopemu": "Lagos",
-    "duboyi": "FCT",
-    "dutse": "FCT",
-    "dutse apo": "FCT",
-    "ebute meta": "Lagos",
-    "ebute metta": "Lagos",
-    "ebute-metta": "Lagos",
-    "egbe ikotun": "Lagos",
-    "egbeda": "Lagos",
-    "ejigbo": "Lagos",
-    "eket": "Akwa Ibom",
-    "elelenwo": "Rivers",
-    "enugu": "Enugu",
-    "eruwa": "Oyo",
-    "fadeyi": "Lagos",
-    "fastac town": "Lagos",
-    "festac": "Lagos",
-    "festac town": "Lagos",
-    "festac/amuwo": "Lagos",
-    "galadimawa": "FCT",
-    "garki": "FCT",
-    "gbagada": "Lagos",
-    "gombe": "Gombe",
-    "gudu": "FCT",
-    "gwagwalada": "FCT",
-    "gwarimpa": "FCT",
-    "gwaska": "FCT",
-    "ibadan": "Oyo",
-    "ibafo": "Lagos",
-    "ibeju lekki": "Lagos",
-    "ibeju-lekki": "Lagos",
-    "idimu": "Lagos",
-    "idu": "FCT",
-    "idumota": "Lagos",
-    "ifako": "Lagos",
-    "ifako-agege": "Lagos",
-    "igando": "Lagos",
-    "iganmu": "Lagos",
-    "ijebu-ode": "Ogun",
-    "ijebu ode": "Ogun",
-    "ijebu mushin": "Ogun",
-    "ijegun": "Lagos",
-    "ijeodo": "Lagos",
-    "ijeshatedo": "Lagos",
-    "ijora": "Lagos",
-    "iju": "Lagos",
-    "iju ishaga": "Lagos",
-    "ikate": "Lagos",
-    "ikeja": "Lagos",
-    "ikorodu": "Lagos",
-    "ikosi ketu": "Lagos",
-    "ikosi-ketu": "Lagos",
-    "ikota": "Lagos",
-    "ikotun": "Lagos",
-    "ikoyi": "Lagos",
-    "ilaro": "Ogun",
-    "ilasa": "Lagos",
-    "ilishan-remo": "Ogun",
-    "ilorin": "Kwara",
-    "ilupeju": "Lagos",
-    "illupeju": "Lagos",
-    "ipaja": "Lagos",
-    "isale-eko": "Lagos",
-    "isale eko": "Lagos",
-    "iseyin": "Oyo",
-    "ishaga": "Lagos",
-    "isheri": "Lagos",
-    "isolo": "Lagos",
-    "itafaji": "Lagos",
-    "itire": "Lagos",
-    "iyana ipaja": "Lagos",
-    "jabi": "FCT",
-    "jahi": "FCT",
-    "jericho": "Oyo",
-    "jibowu": "Lagos",
-    "jos": "Plateau",
-    "kado": "FCT",
-    "kaduna": "Kaduna",
-    "kano": "Kano",
-    "karu": "FCT",
-    "katampe": "FCT",
-    "ketu": "Lagos",
-    "kubwa": "FCT",
-    "kuje": "FCT",
-    "lafiaji": "Lagos",
-    "lagos": "Lagos",
-    "lagos island": "Lagos",
-    "lekki": "Lagos",
-    "lekki ajah": "Lagos",
-    "lekki phase 1": "Lagos",
-    "lekki vgc": "Lagos",
-    "life camp": "FCT",
-    "lokoja": "Kogi",
-    "lugbe": "FCT",
-    "mabushi": "FCT",
-    "magodo": "Lagos",
-    "maitama": "FCT",
-    "makurdi": "Benue",
-    "mararaba": "Nasarawa",
-    "marina": "Lagos",
-    "maroko": "Lagos",
-    "maryland": "Lagos",
-    "matori": "Lagos",
-    "mende": "Lagos",
-    "mile 2": "Lagos",
-    "mowe": "Ogun",
-    "mowe/ibafo": "Ogun",
-    "mushin": "Lagos",
-    "nasarawa": "Nasarawa",
-    "nnewi": "Anambra",
-    "nyanya": "FCT",
-    "obanikoro": "Lagos",
-    "obantoko": "Ogun",
-    "ogba": "Lagos",
-    "ogbomosho": "Oyo",
-    "ogere": "Ogun",
-    "ogijo": "Ogun",
-    "ogudu": "Lagos",
-    "ojo": "Lagos",
-    "ojodu": "Lagos",
-    "ojodu berger": "Lagos",
-    "ojokoro": "Lagos",
-    "ojota": "Lagos",
-    "okota": "Lagos",
-    "okitipupa": "Ondo",
-    "oko oba": "Lagos",
-    "olodi": "Lagos",
-    "onigbongbo": "Lagos",
-    "onikan": "Lagos",
-    "onipanu": "Lagos",
-    "oniru": "Lagos",
-    "onitsha": "Anambra",
-    "oregun": "Lagos",
-    "orile iganmu": "Lagos",
-    "osborne": "Lagos",
-    "oshodi": "Lagos",
-    "oshodi-isolo": "Lagos",
-    "osogbo": "Osun",
-    "ota": "Ogun",
-    "owerri": "Imo",
-    "owerrinta": "Abia",
-    "owo": "Ondo",
-    "oworonshoki": "Lagos",
-    "oworonsoki": "Lagos",
-    "palmgrove": "Lagos",
-    "pedro": "Lagos",
-    "port harcourt": "Rivers",
-    "ph": "Rivers",
-    "sabo": "Lagos",
-    "sagamu": "Ogun",
-    "saminaka": "Kaduna",
-    "sango ota": "Ogun",
-    "sango-ota": "Ogun",
-    "sangotedo": "Lagos",
-    "satellite town": "Lagos",
-    "satalite town": "Lagos",
-    "satelite town": "Lagos",
-    "shangisha": "Lagos",
-    "shomolu": "Lagos",
-    "somolu": "Lagos",
-    "suleja": "Niger",
-    "surulere": "Lagos",
-    "tanke": "Kwara",
-    "tinubu square": "Lagos",
-    "ughelli": "Delta",
-    "ugheli": "Delta",
-    "umuahia": "Abia",
-    "umunze": "Anambra",
-    "uwani": "Enugu",
-    "uyo": "Akwa Ibom",
-    "vgc": "Lagos",
-    "victoria island": "Lagos",
-    "warri": "Delta",
-    "woji": "Rivers",
-    "wuse": "FCT",
-    "wuse 2": "FCT",
-    "wuse zone 5": "FCT",
-    "yaba": "Lagos",
-    "yenagoa": "Bayelsa",
-    "yenegoa": "Bayelsa",
-    "zone 5": "FCT",
-    "zone 6 abuja": "FCT",
+    "aba": "Abia", "abakaliki": "Ebonyi", "abeokuta": "Ogun", "abuja": "FCT",
+    "abulado": "Lagos", "abule ado": "Lagos", "abule egba": "Lagos", "abule iroko": "Ogun",
+    "abule odu": "Lagos", "ado ekiti": "Ekiti", "ado-ekiti": "Ekiti", "agboju": "Lagos",
+    "agege": "Lagos", "agidingbi": "Lagos", "aguda": "Lagos", "ajah": "Lagos",
+    "ajao estate": "Lagos", "ajegunle": "Lagos", "akoka": "Lagos", "akure": "Ondo",
+    "akute": "Ogun", "akwa": "Anambra", "alagbado": "Lagos", "alausa": "Lagos",
+    "allen": "Lagos", "amuwo odofin": "Lagos", "amuwo-odofin": "Lagos", "anthony": "Lagos",
+    "anthony village": "Lagos", "apapa": "Lagos", "apete": "Oyo", "apo": "FCT",
+    "apongbon": "Lagos", "arepo": "Ogun", "asaba": "Delta", "asokoro": "FCT",
+    "auchi": "Edo", "awkunanaw": "Enugu", "awoyaya": "Lagos", "badagry": "Lagos",
+    "badagery": "Lagos", "badagary": "Lagos", "bariga": "Lagos", "bauchi": "Bauchi",
+    "benin": "Edo", "benin city": "Edo", "berger": "Lagos", "bori": "Rivers",
+    "calabar": "Cross River", "dopemu": "Lagos", "duboyi": "FCT", "dutse": "FCT",
+    "dutse apo": "FCT", "ebute meta": "Lagos", "ebute metta": "Lagos",
+    "ebute-metta": "Lagos", "egbe ikotun": "Lagos", "egbeda": "Lagos", "ejigbo": "Lagos",
+    "eket": "Akwa Ibom", "elelenwo": "Rivers", "enugu": "Enugu", "eruwa": "Oyo",
+    "fadeyi": "Lagos", "fastac town": "Lagos", "festac": "Lagos", "festac town": "Lagos",
+    "festac/amuwo": "Lagos", "galadimawa": "FCT", "garki": "FCT", "gbagada": "Lagos",
+    "gombe": "Gombe", "gudu": "FCT", "gwagwalada": "FCT", "gwarimpa": "FCT",
+    "gwaska": "FCT", "ibadan": "Oyo", "ibafo": "Lagos", "ibeju lekki": "Lagos",
+    "ibeju-lekki": "Lagos", "idimu": "Lagos", "idu": "FCT", "idumota": "Lagos",
+    "ifako": "Lagos", "ifako-agege": "Lagos", "igando": "Lagos", "iganmu": "Lagos",
+    "ijebu-ode": "Ogun", "ijebu ode": "Ogun", "ijebu mushin": "Ogun", "ijegun": "Lagos",
+    "ijeodo": "Lagos", "ijeshatedo": "Lagos", "ijora": "Lagos", "iju": "Lagos",
+    "iju ishaga": "Lagos", "ikate": "Lagos", "ikeja": "Lagos", "ikorodu": "Lagos",
+    "ikosi ketu": "Lagos", "ikosi-ketu": "Lagos", "ikota": "Lagos", "ikotun": "Lagos",
+    "ikoyi": "Lagos", "ilaro": "Ogun", "ilasa": "Lagos", "ilishan-remo": "Ogun",
+    "ilorin": "Kwara", "ilupeju": "Lagos", "illupeju": "Lagos", "ipaja": "Lagos",
+    "isale-eko": "Lagos", "isale eko": "Lagos", "iseyin": "Oyo", "ishaga": "Lagos",
+    "isheri": "Lagos", "isolo": "Lagos", "itafaji": "Lagos", "itire": "Lagos",
+    "iyana ipaja": "Lagos", "jabi": "FCT", "jahi": "FCT", "jericho": "Oyo",
+    "jibowu": "Lagos", "jos": "Plateau", "kado": "FCT", "kaduna": "Kaduna",
+    "kano": "Kano", "karu": "FCT", "katampe": "FCT", "ketu": "Lagos", "kubwa": "FCT",
+    "kuje": "FCT", "lafiaji": "Lagos", "lagos": "Lagos", "lagos island": "Lagos",
+    "lekki": "Lagos", "lekki ajah": "Lagos", "lekki phase 1": "Lagos", "lekki vgc": "Lagos",
+    "life camp": "FCT", "lokoja": "Kogi", "lugbe": "FCT", "mabushi": "FCT",
+    "magodo": "Lagos", "maitama": "FCT", "makurdi": "Benue", "mararaba": "Nasarawa",
+    "marina": "Lagos", "maroko": "Lagos", "maryland": "Lagos", "matori": "Lagos",
+    "mende": "Lagos", "mile 2": "Lagos", "mowe": "Ogun", "mowe/ibafo": "Ogun",
+    "mushin": "Lagos", "nasarawa": "Nasarawa", "nnewi": "Anambra", "nyanya": "FCT",
+    "obanikoro": "Lagos", "obantoko": "Ogun", "ogba": "Lagos", "ogbomosho": "Oyo",
+    "ogere": "Ogun", "ogijo": "Ogun", "ogudu": "Lagos", "ojo": "Lagos",
+    "ojodu": "Lagos", "ojodu berger": "Lagos", "ojokoro": "Lagos", "ojota": "Lagos",
+    "okota": "Lagos", "okitipupa": "Ondo", "oko oba": "Lagos", "olodi": "Lagos",
+    "onigbongbo": "Lagos", "onikan": "Lagos", "onipanu": "Lagos", "oniru": "Lagos",
+    "onitsha": "Anambra", "oregun": "Lagos", "orile iganmu": "Lagos", "osborne": "Lagos",
+    "oshodi": "Lagos", "oshodi-isolo": "Lagos", "osogbo": "Osun", "ota": "Ogun",
+    "owerri": "Imo", "owerrinta": "Abia", "owo": "Ondo", "oworonshoki": "Lagos",
+    "oworonsoki": "Lagos", "palmgrove": "Lagos", "pedro": "Lagos",
+    "port harcourt": "Rivers", "ph": "Rivers", "sabo": "Lagos", "sagamu": "Ogun",
+    "saminaka": "Kaduna", "sango ota": "Ogun", "sango-ota": "Ogun",
+    "sangotedo": "Lagos", "satellite town": "Lagos", "satalite town": "Lagos",
+    "satelite town": "Lagos", "shangisha": "Lagos", "shomolu": "Lagos",
+    "somolu": "Lagos", "suleja": "Niger", "surulere": "Lagos", "tanke": "Kwara",
+    "tinubu square": "Lagos", "ughelli": "Delta", "ugheli": "Delta",
+    "umuahia": "Abia", "umunze": "Anambra", "uwani": "Enugu", "uyo": "Akwa Ibom",
+    "vgc": "Lagos", "victoria island": "Lagos", "warri": "Delta", "woji": "Rivers",
+    "wuse": "FCT", "wuse 2": "FCT", "wuse zone 5": "FCT", "yaba": "Lagos",
+    "yenagoa": "Bayelsa", "yenegoa": "Bayelsa", "zone 5": "FCT", "zone 6 abuja": "FCT",
 }
-
-# ---------------------------------------------------------------------------
-# Learned city cache  –  grows automatically as the AI resolves new cities
-# ---------------------------------------------------------------------------
-# The static _CITY_TO_STATE table above is a fast first-pass lookup for known
-# Nigerian cities. But new clients will always bring cities not in that table.
-# Every time the AI resolves a city → state mapping that isn't already known,
-# we write it to a JSON cache file next to this script. On the next run the
-# engine loads that cache and merges it into _CITY_TO_STATE — so the table
-# gets smarter with every file processed, with zero manual maintenance.
 
 _CITY_CACHE_PATH = Path(__file__).parent / "learned_cities.json"
 
 
 def _load_city_cache() -> dict[str, str]:
-    """Load previously learned city→state mappings from disk."""
     if _CITY_CACHE_PATH.exists():
         try:
             with _CITY_CACHE_PATH.open("r", encoding="utf-8") as fh:
@@ -1825,7 +1153,6 @@ def _load_city_cache() -> dict[str, str]:
 
 
 def _save_city_cache(cache: dict[str, str]) -> None:
-    """Persist the city→state cache to disk."""
     try:
         with _CITY_CACHE_PATH.open("w", encoding="utf-8") as fh:
             json.dump(dict(sorted(cache.items())), fh, indent=2, ensure_ascii=False)
@@ -1833,11 +1160,8 @@ def _save_city_cache(cache: dict[str, str]) -> None:
         logger.warning("Could not save city cache: %s", exc)
 
 
-# Merge learned cache into the live lookup table at import time
 _CITY_TO_STATE.update(_load_city_cache())
 
-# Build a single flat regex that matches any state name at a word boundary.
-# Sorted longest-first so "Akwa Ibom" matches before "Akwa".
 _STATE_NAMES_SORTED = sorted(_NG_STATES.keys(), key=len, reverse=True)
 _STATE_REGEX = re.compile(
     r"\b(" + "|".join(re.escape(s) for s in _STATE_NAMES_SORTED) + r")\s*(state)?\b",
@@ -1846,81 +1170,35 @@ _STATE_REGEX = re.compile(
 
 
 def _normalize_ng_state(value: Any) -> Any:
-    """
-    Canonicalize a Nigerian state name/synonym to Odoo's expected spelling
-    (e.g. "Federal Capital Territory" or "Abuja" -> "FCT") via the same
-    _NG_STATES lookup _extract_state_country_from_row uses. Plain dict
-    lookup — no AI call.
-
-    This exists as a single, final pass over the State column rather than
-    another spot fix in whichever step happened to produce the wrong value.
-    The State value can come from four different places (rule-based
-    extraction, AI address splitting, the AI country/state fallback, or AI
-    field cleaning), and each of those AI prompts only lists "FCT" as one
-    example state among many rather than explicitly instructing
-    abbreviation — so fixing one path leaves the same gap open in the
-    other three. Running this once, after every other step has already
-    populated the column, closes all of them at once. Values not found in
-    the table (e.g. non-Nigerian states/counties) are returned unchanged.
-    """
     if not isinstance(value, str) or not value.strip():
         return value
     key = value.strip().lower()
     if key in _NG_STATES:
         return _NG_STATES[key]
-    # Strip a trailing "state" suffix (e.g. "Ogun State" -> "ogun") and
-    # retry — mirrors _STATE_REGEX's optional "state" suffix handling, so
-    # this pass stays consistent with what the rule-based extraction path
-    # already accepts.
     stripped = re.sub(r"\s+state$", "", key).strip()
     return _NG_STATES.get(stripped, value)
 
 
 def _extract_state_country_from_row(combined: str) -> tuple[str | None, str | None]:
-    """
-    Given a combined text string built from ALL address columns in a row,
-    return (state, country).  Works for any country — not just Nigeria.
-
-    Strategy (pure Python, no LLM, cheapest-first):
-
-    Pass 0 — Explicit country name anywhere in the text
-        Checks the combined text against the world country table.
-        Handles cases like street = "India", or "...CHINA" at end of string.
-
-    Pass 1 — Nigerian state name match (skipping "X Street/Road" false matches)
-        If a Nigerian state is found → country = Nigeria.
-
-    Pass 2 — City → Nigerian state lookup on every token window
-        Catches cases where only a city name is present (e.g. "Ikeja", "Lekki").
-
-    Pass 3 — Nothing found → return (None, None)
-        The AI address parser will handle it in the next stage if needed.
-    """
     if not isinstance(combined, str) or not combined.strip():
         return None, None
 
     text_lower = combined.strip().lower()
 
-    # --- Pass 0: explicit world country name anywhere in text ---
-    # Sorted longest-first to match "United Kingdom" before "United"
-    # If a territory (Hong Kong) AND its sovereign country (China) both appear,
-    # prefer the sovereign country — scan all matches, return the non-territory one.
     _TERRITORY_NAMES = {"hong kong", "macau", "macao", "puerto rico", "dubai", "taiwan"}
     found_countries: list[str] = []
     for country_lower, country_proper in _WORLD_COUNTRIES_SORTED:
         if re.search(r"\b" + re.escape(country_lower) + r"\b", text_lower):
             if country_lower == "nigeria":
-                break  # fall through to state extraction
+                break
             found_countries.append((country_lower, country_proper))
     if found_countries:
-        # Prefer sovereign over territory when both present
         sovereign = [
             (cl, cp) for cl, cp in found_countries if cl not in _TERRITORY_NAMES
         ]
         best = sovereign[0] if sovereign else found_countries[0]
         return None, best[1]
 
-    # --- Pass 1: Nigerian state name match ---
     _STREET_WORDS_RE = re.compile(
         r"^(street|road|avenue|close|lane|way|crescent|drive|place|court|str|rd|blvd)\b",
         re.IGNORECASE,
@@ -1932,9 +1210,7 @@ def _extract_state_country_from_row(combined: str) -> tuple[str | None, str | No
             continue
         after = text_lower[m.end() :].strip().lstrip(",. |")
         if _STREET_WORDS_RE.match(after):
-            continue  # "Kano Street" is not Kano state
-        # Also skip if followed by "word + expressway/road/street"
-        # e.g. "LAGOS IBADAN EXPRESSWAY" — Lagos here is part of a road name
+            continue
         _COMPOUND_ROAD_RE = re.compile(
             r"^\w+\s+(expressway|highway|bypass|motorway|freeway|road|street|way)\b",
             re.IGNORECASE,
@@ -1943,32 +1219,14 @@ def _extract_state_country_from_row(combined: str) -> tuple[str | None, str | No
             continue
         return state, "Nigeria"
 
-    # --- Pass 2: city → Nigerian state lookup ---
     _STREET_SUFFIXES = {
-        "street",
-        "road",
-        "avenue",
-        "close",
-        "lane",
-        "way",
-        "crescent",
-        "drive",
-        "place",
-        "court",
-        "boulevard",
-        "expressway",
-        "bypass",
-        "highway",
-        "freeway",
-        "motorway",
-        "str",
-        "rd",
-        "express",
+        "street", "road", "avenue", "close", "lane", "way", "crescent", "drive",
+        "place", "court", "boulevard", "expressway", "bypass", "highway",
+        "freeway", "motorway", "str", "rd", "express",
     }
     tokens = re.split(r"[,|\s]+", text_lower.rstrip("."))
     tokens = [t for t in tokens if t]
 
-    # Try trailing tokens first (country/state usually at the end)
     for window in (3, 2, 1):
         if len(tokens) >= window:
             candidate = " ".join(tokens[-window:])
@@ -1976,7 +1234,6 @@ def _extract_state_country_from_row(combined: str) -> tuple[str | None, str | No
             if state:
                 return state, "Nigeria"
 
-    # Then full scan, skipping street-name tokens
     for i in range(len(tokens)):
         if i + 1 < len(tokens) and tokens[i + 1] in _STREET_SUFFIXES:
             continue
@@ -1990,16 +1247,15 @@ def _extract_state_country_from_row(combined: str) -> tuple[str | None, str | No
 
 
 def _strip_odoo_prefix(val: Any) -> Any:
-    """Remove Odoo internal export IDs like '__export__.res_partner_1234_abc' → keep the ref."""
     if not isinstance(val, str):
         return val
     if val.startswith("__export__"):
-        return None  # discard internal IDs entirely – not useful in imports
+        return None
     return val.strip()
 
 
 # ===========================================================================
-# 5. AI ADDRESS PARSER  –  batch LLM call for unstructured address strings
+# 5. AI ADDRESS PARSER
 # ===========================================================================
 
 
@@ -2008,26 +1264,13 @@ def ai_parse_addresses(
     client: anthropic.Anthropic,
     batch_size: int = 20,
 ) -> list[dict]:
-    """
-    Given a list of raw address strings, return a list of dicts with keys:
-    street, street2, city, state, zip, country.
-
-    Batches calls to keep cost low and avoid timeouts.
-    """
     empty = {
-        "street": None,
-        "street2": None,
-        "city": None,
-        "state": None,
-        "zip": None,
-        "country": None,
+        "street": None, "street2": None, "city": None,
+        "state": None, "zip": None, "country": None,
     }
     if batch_size < 1:
         raise ValueError("Address batch size must be at least 1")
 
-    # Repeated addresses do not need repeated AI calls, and blank values have
-    # nothing for the model to parse. Keep one result per distinct non-empty
-    # address, then expand back to the original row order below.
     normalized_addresses = [
         address.strip() if isinstance(address, str) else "" for address in addresses
     ]
@@ -2037,10 +1280,7 @@ def ai_parse_addresses(
     request_count = (len(unique_addresses) + batch_size - 1) // batch_size
     logger.info(
         "AI address parsing: %d rows, %d unique non-empty addresses, %d provider requests at batch size %d",
-        len(addresses),
-        len(unique_addresses),
-        request_count,
-        batch_size,
+        len(addresses), len(unique_addresses), request_count, batch_size,
     )
     parsed_by_address: dict[str, dict] = {}
 
@@ -2049,9 +1289,8 @@ def ai_parse_addresses(
         parsed = _ai_address_batch(batch, client)
         parsed_by_address.update(zip(batch, parsed))
         if i + batch_size < len(unique_addresses):
-            time.sleep(0.3)  # light rate-limit courtesy pause
+            time.sleep(0.3)
 
-    # Preserve the input row order and length, including blank addresses.
     return [
         parsed_by_address.get(address, empty.copy()) for address in normalized_addresses
     ]
@@ -2059,12 +1298,8 @@ def ai_parse_addresses(
 
 def _ai_address_batch(batch: list[str], client: anthropic.Anthropic) -> list[dict]:
     empty = {
-        "street": None,
-        "street2": None,
-        "city": None,
-        "state": None,
-        "zip": None,
-        "country": None,
+        "street": None, "street2": None, "city": None,
+        "state": None, "zip": None, "country": None,
     }
 
     numbered = {str(i): addr for i, addr in enumerate(batch)}
@@ -2110,9 +1345,7 @@ Return ONLY the JSON object. No prose, no markdown.
     for attempt in range(max_retries):
         try:
             raw_text = _complete_with_fallback(
-                client,
-                system_prompt,
-                user_prompt,
+                client, system_prompt, user_prompt,
                 max_tokens=max(1500, len(batch) * 60),
             )
             raw_text = re.sub(
@@ -2128,22 +1361,15 @@ Return ONLY the JSON object. No prose, no markdown.
 
 
 # ===========================================================================
-# 5b. AI COUNTRY / STATE RESOLVER  –  fallback for rows rule-based can't resolve
+# 5b. AI COUNTRY / STATE RESOLVER
 # ===========================================================================
 
 
 def ai_resolve_country_state(
-    rows: list[dict],  # list of {idx, combined_address} dicts
+    rows: list[dict],
     client: anthropic.Anthropic,
     batch_size: int = 30,
 ) -> dict[int, dict]:
-    """
-    For rows where rule-based extraction found neither country nor state,
-    ask the AI to infer them from whatever address text exists in the row.
-
-    Only called for rows that actually need it — keeps API cost minimal.
-    Returns a dict: { original_row_idx: {"state": ..., "country": ...} }
-    """
     results: dict[int, dict] = {}
     empty = {"state": None, "country": None}
 
@@ -2161,11 +1387,6 @@ def _ai_country_state_batch(
     rows: list[dict],
     client: anthropic.Anthropic,
 ) -> dict[int, dict]:
-    """
-    Single batched LLM call to resolve country and state from raw address text.
-    Input rows: [{"idx": int, "combined_address": str}, ...]
-    Returns:    {idx: {"state": str|None, "country": str|None}}
-    """
     empty = {"state": None, "country": None}
     numbered = {str(r["idx"]): r["combined_address"] for r in rows}
 
@@ -2221,7 +1442,7 @@ Return ONLY the JSON object.
 
 
 # ===========================================================================
-# 5c. AI FIELD-LEVEL CLEANER  –  fixes cross-contaminated fields
+# 5c. AI FIELD-LEVEL CLEANER
 # ===========================================================================
 
 
@@ -2231,25 +1452,10 @@ def ai_clean_flagged_fields(
     client: anthropic.Anthropic,
     batch_size: int = 25,
 ) -> pd.DataFrame:
-    """
-    For fields the column mapper flagged as containing wrong data
-    (e.g. phone col has person names, state col has city names),
-    send each unique dirty value to the AI in one batched call and
-    get back a clean corrected value — or null if the value does
-    not belong in that field at all.
-
-    Examples:
-      Phone = "PHARM GODWIN OSUJI"         → null  (it's a name, not a phone)
-      Phone = "08095000005,  08033060854"  → "08095000005"  (keep first)
-      Mobile = "08030511797 Kabiru Abubakar" → "08030511797" (strip the name)
-      State = "Ikeja"                      → null  (it's a city, not a state)
-      Country = "08012345678"              → null  (it's a phone, not a country)
-    """
     for field in flagged_fields:
         if field not in df.columns:
             continue
 
-        # Only process non-null values — collect unique dirty ones to minimise tokens
         mask_dirty = df[field].notna() & (df[field].astype(str).str.strip() != "")
         unique_vals = df.loc[mask_dirty, field].astype(str).unique().tolist()
 
@@ -2260,7 +1466,6 @@ def ai_clean_flagged_fields(
             "AI field clean: '%s' — %d unique values to check", field, len(unique_vals)
         )
 
-        # Batch all unique values from each flagged field so AI reviews each one.
         corrections: dict[str, str | None] = {}
         for i in range(0, len(unique_vals), batch_size):
             batch = unique_vals[i : i + batch_size]
@@ -2269,13 +1474,11 @@ def ai_clean_flagged_fields(
             if i + batch_size < len(unique_vals):
                 time.sleep(0.3)
 
-        # Apply corrections back to DataFrame
         df[field] = (
             df[field]
             .astype(str)
             .map(lambda v: corrections.get(v, v) if pd.notna(v) and v.strip() else v)
         )
-        # Treat "None" string results as actual None
         df[field] = df[field].replace({"None": None, "nan": None, "": None})
 
     return df
@@ -2286,14 +1489,8 @@ def _ai_field_clean_batch(
     values: list[str],
     client: anthropic.Anthropic,
 ) -> dict[str, str | None]:
-    """
-    Single batched LLM call to clean a list of potentially-wrong values
-    for a specific Odoo field.
-    """
     numbered = {str(i): v for i, v in enumerate(values)}
 
-    # Field-specific cleaning rules — tailored instructions per field type
-    # produce much more precise AI output than generic rules
     _field_rules: dict[str, str] = {
         "phone": (
             "Strip any person name or label prefix. Keep only the phone number digits and "
@@ -2355,9 +1552,7 @@ Return ONLY the JSON object.
         except (json.JSONDecodeError, _LLMUnavailable) as exc:
             logger.warning(
                 "Field clean batch attempt %d failed for '%s': %s",
-                attempt + 1,
-                field_name,
-                exc,
+                attempt + 1, field_name, exc,
             )
             time.sleep(2**attempt)
 
@@ -2368,7 +1563,7 @@ Return ONLY the JSON object.
 
 
 # ===========================================================================
-# 6. COLUMN REMAPPER  –  apply AI mapping + fill defaults + reorder
+# 6. COLUMN REMAPPER
 # ===========================================================================
 
 
@@ -2381,38 +1576,16 @@ def apply_column_mapping(
     flags: dict[str, list[str]] | None = None,
     address_batch_size: int = 20,
 ) -> pd.DataFrame:
-    """
-    1. Rename raw columns to Odoo field names per AI mapping.
-    2. AI address splitting  — driven by flags["needs_address_split"] from the column
-       mapper. No heuristics. The AI already saw the data and flagged what needs splitting.
-    3. AI field cleaning     — driven by flags["needs_field_clean"]. Fixes cross-field
-       contamination: phone cols with names, state cols with cities, etc.
-    4. AI country/state fallback for rows still missing location after steps 2-3.
-    5. Drop unmapped columns.
-    6. Add missing schema columns with default values.
-    7. Reorder to match schema order.
-    """
     flags = flags or {"needs_address_split": [], "needs_field_clean": []}
-    # --- Step 1: Rename ---
     rename_map: dict[str, str] = {k: v for k, v in mapping.items() if v is not None}
     df = df.rename(columns=rename_map)
 
-    # Drop duplicate columns (keep first occurrence after rename)
     df = df.loc[:, ~df.columns.duplicated(keep="first")]
 
-    # --- Step 2: AI address splitting — only for columns the AI flagged ---
-    # The column mapper already saw sample data and flagged raw columns whose values
-    # are combined address strings needing splitting. We use that judgement directly
-    # instead of a comma-counting heuristic that can't understand context.
     _addr_field_map = {
-        "street": "Street",
-        "street2": "Street2",
-        "city": "City",
-        "state": "State",
-        "zip": "Zip",
-        "country": "Country",
+        "street": "Street", "street2": "Street2", "city": "City",
+        "state": "State", "zip": "Zip", "country": "Country",
     }
-    # Resolve flagged raw col names → their post-rename Odoo field names
     needs_split_odoo = set()
     for raw_col in flags.get("needs_address_split", []):
         odoo_name = mapping.get(raw_col)
@@ -2425,8 +1598,6 @@ def apply_column_mapping(
         logger.info(
             "AI address splitting flagged columns: %s", sorted(needs_split_odoo)
         )
-        # Build one combined address string per row from all flagged columns
-        # (handles cases where address is split across two flagged columns)
         combined_addrs = (
             df[sorted(needs_split_odoo)]
             .fillna("")
@@ -2444,59 +1615,28 @@ def apply_column_mapping(
             if odoo_field not in df.columns:
                 df[odoo_field] = parsed_vals
             elif odoo_field in needs_split_odoo:
-                # This Odoo field WAS one of the flagged dirty columns (e.g. "Street"
-                # itself held the full messy combined string). It must be force-
-                # overwritten with the AI's clean parsed value on every row that had
-                # data to split — "only fill if blank" would never fire here, since
-                # the dirty column is never blank, it's just wrong. We still leave a
-                # row's Street alone if the AI genuinely returned nothing for it
-                # (parsed_vals[p] is None) so we don't blank out something it
-                # couldn't parse.
                 positions = list(range(len(parsed_vals)))
                 for p in positions:
                     if parsed_vals[p] not in (None, ""):
                         df.iloc[p, df.columns.get_loc(odoo_field)] = parsed_vals[p]
             else:
-                # This Odoo field is a genuinely separate target (e.g. "Street2",
-                # "Zip") that didn't exist as one of the original dirty columns.
-                # Only fill blanks here — never clobber a value the BA or an
-                # earlier step already set correctly.
-                # parsed_vals is a plain positional array (0, 1, 2... matching the
-                # row order we sent to the AI). We must select by POSITION here,
-                # not by index label — df.index[mask] gives label numbers, which
-                # can drift from position if any earlier step dropped/reordered
-                # rows. Using .iloc + a positional boolean mask keeps everything
-                # aligned by position throughout, so the right address always
-                # lands on the right row.
                 mask = df[odoo_field].isna() | (
                     df[odoo_field].astype(str).str.strip() == ""
                 )
-                positions = mask.to_numpy().nonzero()[
-                    0
-                ]  # positional indices where mask is True
+                positions = mask.to_numpy().nonzero()[0]
                 df.iloc[positions, df.columns.get_loc(odoo_field)] = [
                     parsed_vals[p] for p in positions
                 ]
 
-        # Clear the original flagged columns — their content has been redistributed
         for col in needs_split_odoo:
             if col in df.columns and col not in _addr_field_map.values():
                 df.drop(columns=[col], inplace=True, errors="ignore")
 
-    # --- Step 2c: AI field-level cleaning for cross-contaminated fields ---
-    # The column mapper flagged Odoo fields whose values contain wrong data
-    # (phone with names, state with city values, etc.). We fix those now.
     needs_clean = flags.get("needs_field_clean", [])
     if needs_clean:
         logger.info("AI field cleaning flagged fields: %s", needs_clean)
         df = ai_clean_flagged_fields(df, needs_clean, client)
 
-    # --- Step 2b: AI country/state fallback for unresolved rows ---
-    # After rule_based_clean has already tried _extract_state_country_from_row,
-    # some rows still have blank Country and State (e.g. partial addresses, typos,
-    # addresses where no country/city keyword was recognisable).
-    # We collect only those rows, send them in one batched AI call, and fill the gaps.
-    # Cost: typically 0–30 rows per file → 0–1 extra API calls.
     _country_col = next(
         (c for c in df.columns if c.lower() in ("country", "country_id")), None
     )
@@ -2504,14 +1644,8 @@ def apply_column_mapping(
         (c for c in df.columns if c.lower() in ("state", "state_id")), None
     )
     _addr_hint_keys = {
-        "street",
-        "street2",
-        "city",
-        "area",
-        "location",
-        "region",
-        "district",
-        "child_ids/street",
+        "street", "street2", "city", "area", "location", "region",
+        "district", "child_ids/street",
     }
     _addr_text_cols = [
         c
@@ -2534,9 +1668,8 @@ def apply_column_mapping(
             or str(row.get(_state_col, "")).strip() in ("", "None")
         )
         if not (country_blank or state_blank):
-            continue  # already resolved — skip
+            continue
 
-        # Build combined address text from all address-type columns in this row
         parts = [
             str(row[c]).strip()
             for c in _addr_text_cols
@@ -2586,29 +1719,22 @@ def apply_column_mapping(
         )
         logger.info(
             "AI country/state fallback: resolved %d/%d rows",
-            resolved_count,
-            len(_unresolved),
+            resolved_count, len(_unresolved),
         )
 
-        # --- Cache newly learned city → state mappings ---
-        # For every row the AI resolved, if it returned a city name and that
-        # city isn't already in our lookup table, add it to the persistent cache
-        # so future runs won't need to call the AI for that city again.
         new_entries: dict[str, str] = {}
         for item in _unresolved:
             resolved = ai_geo.get(item["idx"], {})
             ai_city = resolved.get("city")
             ai_state = resolved.get("state")
             ai_ctry = resolved.get("country")
-            # Only cache Nigerian city→state (that's what our lookup table covers)
             if ai_city and ai_state and ai_ctry == "Nigeria":
                 city_key = ai_city.strip().lower()
                 if city_key and city_key not in _CITY_TO_STATE:
                     new_entries[city_key] = ai_state
-                    _CITY_TO_STATE[city_key] = ai_state  # live update for this run too
+                    _CITY_TO_STATE[city_key] = ai_state
 
         if new_entries:
-            # Merge into the on-disk cache
             existing_cache = {}
             if _CITY_CACHE_PATH.exists():
                 try:
@@ -2620,67 +1746,30 @@ def apply_column_mapping(
             _save_city_cache(existing_cache)
             logger.info(
                 "City cache: added %d new entries %s",
-                len(new_entries),
-                list(new_entries.items())[:5],
+                len(new_entries), list(new_entries.items())[:5],
             )
 
-    # --- Step 3: Drop unmapped / unknown columns ---
     known_cols = set(schema.keys())
     cols_to_keep = [c for c in df.columns if c in known_cols]
     df = df[cols_to_keep].copy()
 
-    # Infer customer company status before schema defaults add a False value.
-    # A source-provided "Is a Company" column is preserved as-is; inference is
-    # only used when that field was absent from the mapped source data.
     if data_type == "customer" and "Is a Company" not in df.columns and "Name" in df.columns:
         df["Is a Company"] = df["Name"].apply(infer_is_company)
         logger.info("Inferred 'Is a Company' from mapped customer names")
 
-    # --- Step 4: Add missing schema columns with defaults ---
     for field, meta in schema.items():
         if field not in df.columns:
             df[field] = meta["default"]
 
-    # --- Step 5: Reorder to schema order ---
     df = df[[f for f in schema.keys() if f in df.columns]]
 
     return df
 
 
 # ===========================================================================
-# 7. VALIDATOR  –  mandatory field checks + error log
+# 7. VALIDATOR
 # ===========================================================================
 
-# ===========================================================================
-# 7b. INTERNAL ACCOUNTING ENTRY DETECTOR
-#     Flags rows that are bookkeeping line items, not real customers/vendors —
-#     e.g. "Bad & Damage Lagos", "Suspense Account", "Stock Writeoff Q3".
-#     These never get silently dropped — they're routed to the error sheet
-#     for a human to confirm, since this judgment call is never 100% safe
-#     to act on automatically.
-#
-#     IMPORTANT — this engine processes files from ANY client, not just one
-#     company's spreadsheet. A hardcoded list of English phrases or a
-#     specific category name (e.g. "Not Sales") would only work for the one
-#     file it was written against. So this detector is deliberately built
-#     in two tiers:
-#       - A tiny universal regex catches only truly generic accounting
-#         vocabulary that shows up across virtually any company's books
-#         (suspense, write-off, shortage, damaged goods, etc.) — these are
-#         accounting-textbook terms, not this-client's-specific wording.
-#       - Everything else is judged by the AI directly from the row's own
-#         data (name + whatever category/type column exists, whatever it's
-#         called) — no assumption about column names, category values, or
-#         language. This is what makes it work on a file the engine has
-#         never seen before.
-# ===========================================================================
-
-# Universal accounting vocabulary — generic bookkeeping terms that show up
-# across virtually any company's books, in English, regardless of industry.
-# Deliberately kept SMALL: only terms with no plausible reading as a real
-# business/person name. When in doubt, leave it out and let the AI judge —
-# a false match here skips straight past human review, so this list must
-# stay conservative.
 _INTERNAL_ENTRY_PATTERNS = re.compile(
     r"\b("
     r"bad\s*&?\s*damage|damaged\s+goods|missing\s+items?|"
@@ -2699,51 +1788,12 @@ def detect_internal_entries(
     category_col: str | None,
     client: anthropic.Anthropic | None,
 ) -> dict[int, str]:
-    """
-    Identify rows that look like internal accounting/bookkeeping entries
-    rather than real customers or vendors. Works on ANY file — no
-    assumptions about column names, category vocabulary, or language —
-    while costing exactly ONE small AI call per file, regardless of row
-    count. A "judge every row directly" approach was considered but
-    rejected: cost and call count both grow linearly with file size (a
-    50,000-row file would need ~100 chunked calls), which makes per-file
-    cost unpredictable — exactly what this layer needs to avoid.
-
-    Two layers:
-
-    Layer 1 — Free universal regex (no API cost, every file).
-        Catches generic accounting-textbook terms ("suspense", "write-off",
-        "shortage", "damaged goods") that essentially never describe a real
-        business in ANY industry. Deliberately small and conservative.
-
-    Layer 2 — File-specific keyword discovery (ONE small AI call, ~400
-        tokens, regardless of file size). A small, targeted sample is
-        shown to the AI — biased toward rows that look like short/generic
-        labels, since that's where internal entries hide — and it's asked
-        to name a handful of THIS FILE's specific internal-entry
-        vocabulary (if any exists at all). Those keywords compile into a
-        second regex that then runs free across every remaining row. This
-        is what makes the engine generalise per-client without ever
-        calling the AI per row or per chunk: a Lagos restaurant chain's
-        "Cash Sales" buckets and a UK wholesaler's "Stale Cheques" entries
-        both get caught by the SAME mechanism, just with different
-        discovered keywords — at the same flat cost whether the file has
-        200 rows or 200,000.
-
-        If the sample looks completely clean, nothing further is flagged —
-        most files won't have any internal entries at all.
-
-    Returns: { row_position: reason_string } for every row flagged.
-    Never removes anything — purely advisory, for the caller to route to
-    the error/review sheet alongside validation failures.
-    """
     flagged: dict[int, str] = {}
     if name_col not in df.columns:
         return flagged
 
     names = df[name_col].fillna("").astype(str)
 
-    # --- Layer 1: free universal pattern match ---
     for pos, name in enumerate(names):
         if not name.strip():
             continue
@@ -2753,8 +1803,6 @@ def detect_internal_entries(
                 f"Looks like an internal accounting entry (matched: '{m.group(0)}')"
             )
 
-    # --- Layer 2: discover this file's specific internal-entry vocabulary
-    #     with ONE small call, then apply it as a free regex across all rows ---
     if client is not None:
         remaining_positions = [
             p for p in range(len(names)) if p not in flagged and names.iloc[p].strip()
@@ -2796,19 +1844,6 @@ def _sample_for_keyword_discovery(
     candidate_positions: list[int],
     max_sample: int = 60,
 ) -> list[str]:
-    """
-    Build a small, smart sample to show the AI for keyword discovery —
-    biased toward rows that look like short generic labels (where internal
-    entries hide) rather than a plain "first N rows" sample, which could
-    easily miss every internal-entry example in a 1000+ row file.
-
-    Strategy: take every row that is short (<=4 words) and digit-free —
-    the same shape internal entries tend to have — up to max_sample. If
-    that's not enough rows to reach a reasonable sample size, top up with
-    a few longer ones too, so the AI also sees normal-shaped real names
-    for contrast (helps it avoid over-flagging short real business names
-    like "Amir Bakery").
-    """
     short_shaped = []
     other = []
     for pos in candidate_positions:
@@ -2829,15 +1864,6 @@ def _ai_discover_internal_keywords(
     sample_names: list[str],
     client: anthropic.Anthropic,
 ) -> list[str]:
-    """
-    ONE AI call: look at a sample of names from this specific file and
-    identify whether any of them are internal accounting/bookkeeping
-    entries rather than real customers/vendors. If so, extract the
-    distinguishing keyword/phrase from each — these get compiled into a
-    free regex that then runs across the whole file with no further API
-    cost. If the sample contains no such entries, returns an empty list
-    and the file is treated as clean (no Layer 3 fallback needed).
-    """
     system_prompt = (
         "You are a data quality specialist reviewing an Odoo ERP customer/vendor import "
         "from an arbitrary client spreadsheet. Column names, language, and conventions vary "
@@ -2890,29 +1916,11 @@ Return ONLY the JSON object.
         except (json.JSONDecodeError, _LLMUnavailable) as exc:
             logger.warning(
                 "Internal-entry keyword discovery attempt %d failed: %s",
-                attempt + 1,
-                exc,
+                attempt + 1, exc,
             )
             time.sleep(2**attempt)
 
-    # On total failure, find nothing — never guess, just fall back to
-    # whatever Layer 1's universal regex already caught.
     return []
-
-
-# ===========================================================================
-# 7c. DUPLICATE DETECTOR AND MERGER
-#     Confirms likely repeated customers/vendors, then uses the most complete
-#     confirmed row as the canonical record and fills its missing fields from
-#     the other copies. Extra source rows remain in Data and are flagged in
-#     Errors; Cleaned contains one merged record per confirmed duplicate group.
-#
-#     IMPORTANT: name similarity alone is NOT enough. Two different branches
-#     of the same chain (e.g. "Gusto Restaurant - Kano" vs "Gusto Restaurant
-#     Kano" — actually Kano vs Abuja) can have near-identical names but are
-#     genuinely different customers. Address must also be checked before
-#     anything is flagged as a duplicate.
-# ===========================================================================
 
 
 def detect_duplicates(
@@ -2921,36 +1929,6 @@ def detect_duplicates(
     address_col: str | None,
     client: anthropic.Anthropic | None,
 ) -> dict[int, dict]:
-    """
-    Identify rows that are likely the SAME real-world entity entered more
-    than once in the source file.
-
-    Returns: { row_position: {"duplicate_of": earlier_row_position,
-                               "reason": human_readable_explanation} }
-    for every row judged to be a duplicate of an earlier row. The earlier
-    row in each pair is never flagged — only the later occurrence(s) — so
-    exactly one copy survives as "the" record once a human confirms.
-
-    Two-stage approach:
-
-    Stage 1 — Cheap name-similarity prefilter (no API cost).
-        Groups rows whose names collapse to the same value after stripping
-        all punctuation/spacing/case (e.g. "Chiaro Caffe-Lekki" and
-        "Chiaro Caffe - Lekki" both -> "chiarocaffelekki"). This is ONLY
-        a candidate filter — it does not by itself confirm a duplicate,
-        since two different branches can share this same collapsed name.
-
-    Stage 2 — AI confirms using BOTH name and address together.
-        For every candidate group from Stage 1, the AI is shown both the
-        name and address of each row and asked whether they describe the
-        same physical business/customer or two different ones (e.g. two
-        branches of a chain in different cities). Only pairs the AI
-        confirms are genuinely the same entity get flagged.
-
-    Without an address column or without a client, Stage 2 is skipped
-    entirely and nothing is flagged — a name match alone is not reliable
-    enough to act on (see the Gusto Restaurant Kano/Abuja example above).
-    """
     flagged: dict[int, dict] = {}
     if name_col not in df.columns:
         return flagged
@@ -2962,7 +1940,6 @@ def detect_duplicates(
 
     collapsed = names.apply(_collapse)
 
-    # --- Stage 1: group positions by collapsed name ---
     groups: dict[str, list[int]] = {}
     for pos, key in enumerate(collapsed):
         if not key:
@@ -2978,7 +1955,6 @@ def detect_duplicates(
         len(candidate_groups),
     )
 
-    # --- Stage 2: AI confirms using name + address together ---
     if address_col is None or address_col not in df.columns or client is None:
         logger.info(
             "Duplicate detection: no address column or no client available — "
@@ -2988,10 +1964,8 @@ def detect_duplicates(
 
     addresses = df[address_col].fillna("").astype(str)
 
-    # Build one AI request per candidate group (groups are almost always size 2,
-    # occasionally 3 — batching multiple groups into one call keeps cost low)
     group_items = list(candidate_groups.items())
-    batch_size = 15  # groups per AI call, not rows — each group has 2-3 rows
+    batch_size = 15
 
     for i in range(0, len(group_items), batch_size):
         batch = group_items[i : i + batch_size]
@@ -3004,8 +1978,6 @@ def detect_duplicates(
 
         for gi, (_, positions) in enumerate(batch):
             verdicts = ai_results.get(str(gi), [])
-            # verdicts[j] corresponds to positions[j] for j >= 1, telling us
-            # whether positions[j] is a duplicate of positions[0]
             for j in range(1, len(positions)):
                 is_dupe = verdicts[j - 1] if (j - 1) < len(verdicts) else False
                 if is_dupe:
@@ -3032,14 +2004,6 @@ def _merge_confirmed_duplicates(
     df: pd.DataFrame,
     duplicate_flags: dict[int, dict],
 ) -> tuple[pd.DataFrame, dict[int, dict]]:
-    """Merge each AI-confirmed duplicate group into its most complete row.
-
-    The full row set and order are preserved for the Data sheet. For each
-    confirmed group, one deterministic canonical row is selected by populated
-    field count (earliest row breaks ties), then blank/default fields are
-    filled from the other group members. Every non-canonical row remains
-    flagged and points to the canonical row.
-    """
     if not duplicate_flags:
         return df, {}
 
@@ -3103,7 +2067,6 @@ def _merge_confirmed_duplicates(
     for positions in groups.values():
         if len(positions) < 2:
             continue
-        # Most populated record wins; stable source order breaks ties.
         canonical_pos = max(positions, key=lambda pos: (completeness(pos), -pos))
         donors = sorted(
             (pos for pos in positions if pos != canonical_pos),
@@ -3134,8 +2097,7 @@ def _merge_confirmed_duplicates(
 
     logger.info(
         "Duplicate merge: consolidated %d confirmed groups; flagged %d extra rows",
-        merged_group_count,
-        len(merged_flags),
+        merged_group_count, len(merged_flags),
     )
     return merged_df, merged_flags
 
@@ -3144,14 +2106,6 @@ def _ai_confirm_duplicates_batch(
     batch_payload: dict[str, list[dict]],
     client: anthropic.Anthropic,
 ) -> dict[str, list[bool]]:
-    """
-    For each group of candidate-duplicate rows (same collapsed name), ask the
-    AI whether each row after the first is the SAME real-world entity as the
-    first row in that group, using name AND address together.
-
-    Returns: { group_index: [bool, bool, ...] } — one bool per row AFTER the
-    first in that group (True = duplicate of the first row in the group).
-    """
     system_prompt = (
         "You are a data deduplication specialist for an Odoo ERP migration. "
         "Return ONLY valid JSON — no prose, no code fences."
@@ -3198,23 +2152,7 @@ Return ONLY the JSON object.
             )
             time.sleep(2**attempt)
 
-    # On total failure, flag nothing — never guess a real customer away.
     return {}
-
-
-# ===========================================================================
-# 7d. "IS A COMPANY" FLAG MISMATCH DETECTOR
-#     Flags rows where the client's own data suggests "Is a Company" is
-#     likely wrong — specifically: Name and the contact person's name
-#     (contacts / name) hold the SAME value (e.g. both = "Ali Sharafedeen")
-#     while Is a Company = True. A genuine company record's contact person
-#     should be someone OTHER than the company itself — if the "company"
-#     and its own contact are the exact same name, this is usually really
-#     an individual that got marked Is a Company = True by mistake on the
-#     client's side. Like every other advisory detector in this engine,
-#     nothing is ever auto-corrected; flagged rows are routed to the error
-#     sheet for a human to confirm either direction.
-# ===========================================================================
 
 
 def detect_suspicious_is_company_flags(
@@ -3223,28 +2161,6 @@ def detect_suspicious_is_company_flags(
     contact_name_col: str | None,
     is_company_col: str | None,
 ) -> dict[int, str]:
-    """
-    Identify rows where Is a Company is likely wrong because:
-      1. Name and contacts / name hold the same value (case/whitespace-
-         insensitive) — a real company's contact person should be someone
-         other than the company itself, not just repeat the company's own
-         name, and
-      2. Is a Company is set to True for that row, and
-      3. The name itself looks like a person's name, not a business name
-         (reuses the same shape rules as infer_is_company()).
-
-    All three conditions must hold — any one alone is too weak to act on:
-      - Name == contacts/name alone could be a genuine one-person company
-        that listed itself as its own contact.
-      - Is a Company == True alone is just the normal default.
-      - Looks-like-a-person alone is exactly what infer_is_company() already
-        uses to PICK a value when none exists — this check is specifically
-        for when the client supplied an explicit value that contradicts
-        their own data.
-
-    Returns: { row_position: reason_string } for every row flagged.
-    Never modifies the DataFrame — purely advisory.
-    """
     flagged: dict[int, str] = {}
     if name_col not in df.columns or contact_name_col is None or is_company_col is None:
         return flagged
@@ -3262,7 +2178,7 @@ def detect_suspicious_is_company_flags(
         name = names.iloc[pos].strip()
         contact = contacts.iloc[pos].strip()
         if not name or not contact:
-            continue  # need both fields populated to compare them
+            continue
 
         same_value = _norm(name) == _norm(contact)
         if not same_value:
@@ -3270,9 +2186,7 @@ def detect_suspicious_is_company_flags(
 
         is_company_val = is_company_vals.iloc[pos]
         marked_true = is_company_val is True or str(is_company_val).strip().lower() in (
-            "true",
-            "1",
-            "yes",
+            "true", "1", "yes",
         )
         if not marked_true:
             continue
@@ -3297,54 +2211,11 @@ def detect_suspicious_is_company_flags(
 def validate_and_split(
     df: pd.DataFrame,
     data_type: str,
+    version: str = "v19",
     client: anthropic.Anthropic | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame, list[int], dict[str, int]]:
-    """
-    Check every row for the mandatory field, for signs of being an internal
-    accounting/bookkeeping entry, for being a likely duplicate of the
-    selected canonical row, and for a suspicious "Is a Company" flag — but,
-    unlike the old
-    behavior, do NOT remove flagged rows from the main DataFrame. They stay
-    in place (so the output file's row count always matches the input) and
-    are instead flagged for the caller to highlight, each with a specific
-    machine-readable reason code.
-
-    Every row that doesn't make it into the clean bucket is accounted for
-    with exactly ONE of these reason codes (priority order — a row matching
-    more than one check is reported under the highest-priority reason only,
-    so the breakdown numbers always sum to the total flagged count):
-
-      1. "missing_mandatory_field" — Name / Vendor Name is blank.
-      2. "duplicate_of_row_N"      — confirmed duplicate consolidated into
-         the most complete canonical row. The reason identifies that row.
-      3. "flagged_internal_entry" — looks like a bookkeeping/accounting
-         line item rather than a real customer/vendor (see
-         detect_internal_entries()).
-      4. "suspicious_is_company_flag" — Name and contacts / name hold the
-         same value while Is a Company = True and the name looks like a
-         person, not a business (see detect_suspicious_is_company_flags())
-         — a common client data-entry mistake where an individual's name
-         gets copy-pasted into both fields with the company flag left on.
-
-    No source rows are dropped from the Data sheet. Confirmed duplicate
-    groups are merged into one most-complete canonical row for Cleaned; the
-    other source rows remain flagged in Errors for review.
-
-    Returns:
-      - df: all source rows in original order, with canonical duplicate rows
-        filled from their confirmed duplicate copies
-      - error_df: just the flagged rows, with '_reason_code', '_errors'
-        (human-readable text) and '_source_row' columns added
-      - error_positions: 0-based *positional* row numbers (not pandas index
-        labels — upstream steps can leave index gaps) of the flagged rows,
-        so the caller can map them to the correct Excel row for highlighting
-      - breakdown: { "clean": int, "missing_mandatory_field": int,
-        "duplicate_merged": int, "flagged_internal": int,
-        "suspicious_is_company_flag": int } — ready to hand straight to the
-        frontend as the structured stats response
-    """
-    mandatory = MANDATORY_FIELD[data_type]
-    name_col = mandatory  # "Name" for customers, "Vendor Name" for vendors
+    mandatory_list = MANDATORY_FIELD[data_type][version]
+    name_col = mandatory_list[0]
     category_col = next((c for c in df.columns if c.lower() == "category"), None)
     address_col = next((c for c in df.columns if c.lower() == "street"), None)
     contact_name_col = next(
@@ -3352,8 +2223,6 @@ def validate_and_split(
     )
     is_company_col = next((c for c in df.columns if c.lower() == "is a company"), None)
 
-    # Confirm duplicates, merge each confirmed group into its most complete
-    # row, then run row-level checks against the merged canonical values.
     duplicate_flags = detect_duplicates(df, name_col, address_col, client)
     df, duplicate_flags = _merge_confirmed_duplicates(df, duplicate_flags)
     internal_flags = detect_internal_entries(df, name_col, category_col, client)
@@ -3375,24 +2244,28 @@ def validate_and_split(
         reason_code: str | None = None
         reason_text: str | None = None
 
-        # Priority 1: missing mandatory field
-        val = row.get(mandatory)
-        if pd.isna(val) or (isinstance(val, str) and not val.strip()):
-            reason_code = "missing_mandatory_field"
-            reason_text = f"Missing mandatory field: '{mandatory}'"
+        # Check ALL mandatory fields for this version (v19 = ["Name"],
+        # v20 = ["Name", "Email", "Phone"]). A row is only flagged if
+        # at least one required field is blank.
+        missing_fields = []
+        for field in mandatory_list:
+            val = row.get(field)
+            if pd.isna(val) or (isinstance(val, str) and not val.strip()):
+                missing_fields.append(field)
 
-        # Priority 2: duplicate of the selected canonical row
+        if missing_fields:
+            reason_code = "missing_mandatory_field"
+            reason_text = f"Missing mandatory field(s): {', '.join(missing_fields)}"
+
         elif pos in duplicate_flags:
             dup_of = duplicate_flags[pos]["duplicate_of"]
-            reason_code = f"duplicate_of_row_{dup_of + 2}"  # Excel row number
+            reason_code = f"duplicate_of_row_{dup_of + 2}"
             reason_text = duplicate_flags[pos]["reason"]
 
-        # Priority 3: internal accounting entry
         elif pos in internal_flags:
             reason_code = "flagged_internal_entry"
             reason_text = internal_flags[pos]
 
-        # Priority 4: suspicious "Is a Company" flag
         elif pos in is_company_flags:
             reason_code = "suspicious_is_company_flag"
             reason_text = is_company_flags[pos]
@@ -3401,7 +2274,7 @@ def validate_and_split(
             err_row = row.to_dict()
             err_row["_reason_code"] = reason_code
             err_row["_errors"] = reason_text
-            err_row["_source_row"] = pos + 2  # Excel 1-indexed + header row
+            err_row["_source_row"] = pos + 2
             errors.append(err_row)
             error_positions.append(pos)
 
@@ -3435,17 +2308,6 @@ _HEADER_FONT = Font(color="FFFFFF", bold=True)
 
 
 def _style_worksheet(ws, min_width: int = 8, max_width: int = 40) -> None:
-    """
-    Bold white-on-blue header row + auto-sized column widths, applied to a
-    just-written openpyxl worksheet. Pandas' to_excel() writes plain data
-    with no formatting at all — every column defaults to the same narrow
-    width regardless of content, so anything longer than a few characters
-    looks truncated/cramped until a human manually resizes it in Excel.
-
-    Width is based on the longest cell (including the header) in each
-    column, clamped to [min_width, max_width] so one extreme outlier
-    (e.g. a long address) doesn't blow out the whole sheet.
-    """
     for cell in ws[1]:
         cell.fill = _HEADER_FILL
         cell.font = _HEADER_FONT
@@ -3468,59 +2330,25 @@ def _style_worksheet(ws, min_width: int = 8, max_width: int = 40) -> None:
 def process_file(
     input_path: str | Path,
     data_type: str,  # "customer" or "vendor"
+    version: str = "v19",  # Added version parameter
     output_path: str | Path | None = None,
     api_key: str | None = None,
     address_batch_size: int = 20,
 ) -> dict:
-    """
-    Full end-to-end pipeline.
-
-    Returns:
-        {
-            "status": "success" | "partial" | "error",
-            "message": str,
-            "output_path": str | None,
-            "stats": {
-                "total": int,               # rows in the input file
-                "clean": int,               # rows that passed every check
-                "errors": int,               # total flagged rows (clean + errors == total)
-                "missing_mandatory_field": int,  # e.g. blank "Name" / "Vendor Name"
-                "duplicate_merged": int,         # extra confirmed rows merged into a canonical record
-                "flagged_internal": int,         # looks like a bookkeeping entry, not a real customer
-            }
-        }
-
-    Every row in the input is accounted for by exactly one bucket in `stats`
-    (clean + missing_mandatory_field + duplicate_merged + flagged_internal
-    always sums to `total`) — the frontend can build an informative status
-    breakdown straight from this dict instead of a flat "Partial" badge with
-    no explanation for the row-count gap.
-    """
     input_path = Path(input_path)
-    if data_type not in SCHEMA_MAP:
-        raise ValueError(
-            f"data_type must be 'customer' or 'vendor', got: {data_type!r}"
-        )
+    
+    # This will automatically throw an error if version is not supported (e.g. v18 or v20)
+    schema = get_schema(data_type, version)
 
-    schema = SCHEMA_MAP[data_type]
-
-    # --- Resolve output path ---
     if output_path is None:
         output_path = input_path.parent / f"{input_path.stem}_ODOO_READY.xlsx"
     output_path = Path(output_path)
 
-    # --- Anthropic client ---
-    # max_retries=ANTHROPIC_MAX_RETRIES (default 3): the SDK retries a 429
-    # internally before raising — giving Claude a few chances to recover from
-    # a transient rate limit before _complete_with_fallback() drops to the
-    # lower-quality free OpenRouter model. Once those retries are exhausted,
-    # the exception reaches our code and the fallback takes over.
     client = anthropic.Anthropic(
         api_key=api_key, max_retries=ANTHROPIC_MAX_RETRIES
-    )  # api_key=None → reads ANTHROPIC_API_KEY env var
+    )
 
     try:
-        # 1. Load raw file, then normalise structure with AI if needed
         stage_started = time.perf_counter()
         df_raw = load_raw_file(input_path)
         df_raw = ai_normalise_structure(df_raw, input_path, client)
@@ -3530,19 +2358,15 @@ def process_file(
             time.perf_counter() - stage_started,
         )
 
-        # 2. Get a few sample rows for AI context (avoid sending entire sheet)
         sample_rows = df_raw.head(5).to_dict(orient="records")
 
-        # 3. AI column mapping (one LLM call for the whole file)
-        # Returns both the column mapping AND quality flags identifying:
-        #   - columns whose values are combined address strings needing AI splitting
-        #   - Odoo fields whose values contain wrong data (names in phones, cities in state, etc.)
         logger.info("Running AI column mapping …")
         stage_started = time.perf_counter()
         mapping, flags = ai_map_columns(
             raw_columns=list(df_raw.columns),
             target_schema=schema,
             data_type=data_type,
+            version=version,
             client=client,
             sample_rows=sample_rows,
         )
@@ -3575,7 +2399,6 @@ def process_file(
                 "No cleaned workbook was generated."
             )
 
-        # 4. Rule-based Pandas cleaning (pre-rename for phone/email/name heuristics)
         stage_started = time.perf_counter()
         df_clean = rule_based_clean(df_raw.copy(), data_type)
         logger.info(
@@ -3583,7 +2406,6 @@ def process_file(
             time.perf_counter() - stage_started,
         )
 
-        # 5. Apply column mapping + AI-driven address splitting + field cleaning
         stage_started = time.perf_counter()
         df_mapped = apply_column_mapping(
             df_clean,
@@ -3595,17 +2417,15 @@ def process_file(
             address_batch_size=address_batch_size,
         )
 
-        # 6. Apply rule-based cleaning again on renamed columns for consistency
         df_mapped = rule_based_clean(df_mapped, data_type)
         logger.info(
             "Pipeline stage 'mapping and post-mapping cleaning' completed in %.2fs",
             time.perf_counter() - stage_started,
         )
 
-        # 8. Validate (rows stay in place — failures are flagged, not removed)
         stage_started = time.perf_counter()
         df_final, df_errors, error_positions, breakdown = validate_and_split(
-            df_mapped, data_type, client=client
+            df_mapped, data_type, version=version,client=client
         )
         logger.info(
             "Pipeline stage 'validation' completed in %.2fs",
@@ -3613,15 +2433,6 @@ def process_file(
         )
         clean_count = breakdown["clean"]
 
-        # 9. Write output — one workbook, three sheets:
-        #      "Cleaned" — only rows that passed every check, ready to import
-        #      "Data"    — every row, flagged ones highlighted red
-        #      "Errors"  — just the flagged rows, with the reason
-        #    Keeps every input row reachable in the single file the frontend
-        #    already serves, instead of silently dropping rows into a second
-        #    file nothing ever exposes for download, while still giving a
-        #    straight-to-import sheet for the common case of "just give me
-        #    the clean rows".
         stage_started = time.perf_counter()
         error_position_set = set(error_positions)
         clean_mask = [i not in error_position_set for i in range(len(df_final))]
@@ -3630,8 +2441,6 @@ def process_file(
         with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
             df_cleaned.to_excel(writer, sheet_name="Cleaned", index=False)
             df_final.to_excel(writer, sheet_name="Data", index=False)
-            # Keep the Errors tab present on every output, even when it has
-            # headers only because validation found no rows to flag.
             df_errors.to_excel(writer, sheet_name="Errors", index=False)
 
             if error_positions:
@@ -3640,7 +2449,7 @@ def process_file(
                 )
                 ws = writer.sheets["Data"]
                 for pos in error_positions:
-                    excel_row = pos + 2  # +1 for header, +1 for 1-indexing
+                    excel_row = pos + 2
                     for cell in ws[excel_row]:
                         cell.fill = fill
 
@@ -3656,8 +2465,6 @@ def process_file(
 
         status = "success" if df_errors.empty else "partial"
 
-        # Build an informative message that explains the row-count gap instead
-        # of a flat "X clean, Y errors" that hides WHY rows were flagged.
         message_parts = [f"Processed {total_rows} rows → {clean_count} clean"]
         if breakdown["duplicate_merged"]:
             message_parts.append(f"{breakdown['duplicate_merged']} possible duplicates")
@@ -3717,6 +2524,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Odoo Data Migration Engine")
     parser.add_argument("input", help="Path to raw input file (.xlsx / .csv)")
     parser.add_argument("data_type", choices=["customer", "vendor"], help="Record type")
+    parser.add_argument("--version", default="v19", choices=["v19", "v20"], help="Odoo version")
     parser.add_argument("--output", default=None, help="Output file path (optional)")
     parser.add_argument(
         "--api-key",
@@ -3734,6 +2542,7 @@ if __name__ == "__main__":
     result = process_file(
         input_path=args.input,
         data_type=args.data_type,
+        version=args.version,
         output_path=args.output,
         api_key=args.api_key,
         address_batch_size=args.batch_size,
