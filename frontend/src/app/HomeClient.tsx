@@ -83,6 +83,9 @@ export default function HomeClient() {
   const [result, setResult] = useState<ConversionResult | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // NEW: Version State
+  const [version, setVersion] = useState('v18');
+
   // Duplicate Warning Modal state
   const [duplicateWarning, setDuplicateWarning] = useState<{ show: boolean; email: string; fileHash: string } | null>(null);
 
@@ -161,6 +164,7 @@ export default function HomeClient() {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('data_type', detected.key);
+    formData.append('version', version); // NEW: Add version to payload
 
     try {
       const response = await fetch(`${BASE_PATH}/api/clean`, {
@@ -322,6 +326,31 @@ export default function HomeClient() {
                   </div>
                 );
               })}
+            </div>
+          </section>
+
+          {/* Supported Versions Dropdown */}
+          <section className="mb-8">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-500 mb-4">
+              Supported Versions
+            </h2>
+            <div className="relative">
+              <select
+                value={version}
+                onChange={(e) => setVersion(e.target.value)}
+                className="w-full appearance-none rounded-xl border border-slate-200 bg-slate-50 p-4 pr-10 text-slate-800 font-medium focus:outline-none focus:ring-2 focus:ring-brand-blue/30 focus:border-brand-blue transition-colors cursor-pointer"
+              >
+                <option value="v18">Odoo Version 18</option>
+                <option value="v19">Odoo Version 19</option>
+                <option value="v20">Odoo Version 20</option>
+              </select>
+              
+              {/* Custom Chevron Icon for the dropdown */}
+              <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-slate-400">
+                <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+              </div>
             </div>
           </section>
 

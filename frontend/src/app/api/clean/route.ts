@@ -36,6 +36,7 @@ export async function POST(request: Request) {
     const formData = await request.formData();
     const file = formData.get('file') as File | null;
     const dataType = formData.get('data_type');
+    const version = formData.get('version');
 
     if (!file) {
       return NextResponse.json({ error: 'No file provided' }, { status: 400 });
@@ -43,6 +44,12 @@ export async function POST(request: Request) {
     if (dataType !== 'customer' && dataType !== 'vendor') {
       return NextResponse.json(
         { error: "data_type must be 'customer' or 'vendor'" },
+        { status: 400 }
+      );
+    }
+    if (version !== 'v18' && version !== 'v19' && version !== 'v20') {
+      return NextResponse.json(
+        { error: "version must be 'v18', 'v19', or 'v20'" },
         { status: 400 }
       );
     }
@@ -56,7 +63,7 @@ export async function POST(request: Request) {
     const engineForm = new UndiciFormData();
     engineForm.append('file', new Blob([uploadBuffer], { type: file.type }), file.name);
     engineForm.append('data_type', dataType);
-
+    engineForm.append('version', version);
     const startedAt = Date.now();
     const cleanResponse = await undiciFetch(`${ENGINE_URL}/api/clean-data`, {
       method: 'POST',
